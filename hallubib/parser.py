@@ -127,7 +127,10 @@ def parse_bib(text: str) -> list[Reference]:
         title = _extract_bib_field(fields, "title") or ""
         authors = split_authors(fields.get("author", ""))
         year = _parse_year(fields.get("year"))
-        journal = _extract_bib_field(fields, "journal") or _extract_bib_field(fields, "booktitle")
+        journal = (
+            _extract_bib_field(fields, "journal")
+            or _extract_bib_field(fields, "booktitle")
+        )
         doi_raw = fields.get("doi")
         doi = latex_to_unicode(doi_raw).strip() if doi_raw else None
         url = _extract_bib_field(fields, "url")

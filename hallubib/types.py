@@ -11,10 +11,16 @@ class EntryKind(Enum):
 
 
 class Status(Enum):
-    VERIFIED = "Verified"
-    AUTO_CORRECTABLE = "Auto-correctable"
-    NEEDS_ATTENTION = "Needs attention"
     UNKNOWN = "Unknown"
+    NEEDS_ATTENTION = "Needs attention"
+    AUTO_CORRECTABLE = "Auto-correctable"
+    URL_REFERENCE = "URL reference"
+    VERIFIED = "Verified"
+
+
+class DiffKind(Enum):
+    CORRECTION = "correction"
+    SUPPLEMENT = "supplement"
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +57,7 @@ class FieldDiff:
     field_name: str
     local_value: str | None
     online_value: str | None
+    kind: DiffKind = DiffKind.CORRECTION
 
 
 @dataclass(slots=True)

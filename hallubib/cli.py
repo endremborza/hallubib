@@ -20,8 +20,14 @@ def main(argv: list[str] | None = None) -> int:
         "--output", choices=["stdout", "md", "html"], default="stdout",
         help="output format (default: stdout)",
     )
-    parser.add_argument("--clear-cache", action="store_true", help="clear the cache and exit")
-    parser.add_argument("--version", action="version", version=f"hallubib {__version__}")
+    parser.add_argument(
+        "--clear-cache", action="store_true",
+        help="clear the cache and exit",
+    )
+    parser.add_argument(
+        "--version", action="version",
+        version=f"hallubib {__version__}",
+    )
     args = parser.parse_args(argv)
 
     if args.clear_cache:
@@ -37,7 +43,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: {path} not found", file=sys.stderr)
         return 1
     if path.suffix not in (".bib", ".tex"):
-        print(f"Error: unsupported file type {path.suffix}, expected .bib or .tex", file=sys.stderr)
+        print(
+            f"Error: unsupported file type {path.suffix},"
+            " expected .bib or .tex",
+            file=sys.stderr,
+        )
         return 1
 
     refs = parse_file(path)

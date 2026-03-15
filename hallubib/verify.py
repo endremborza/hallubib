@@ -1,4 +1,4 @@
-"""Verify references against OpenAlex, arXiv, and DOI resolution."""
+"""Verify references against OpenAlex, arXiv, Crossref, and DOI resolution."""
 
 import re
 import unicodedata
@@ -9,18 +9,28 @@ from difflib import SequenceMatcher
 import requests
 
 from . import cache
-from .types import CheckResult, FieldDiff, OnlineRecord, Reference, Status
+from .abbrevs import expand as expand_journal
+from .special import (
+    detect_source_type,
+    ignorable_supplements_for,
+    is_url_only_reference,
+    validate_url,
+)
+from .types import CheckResult, DiffKind, FieldDiff, OnlineRecord, Reference, Status
 
 _SESSION: requests.Session | None = None
 _OPENALEX_BASE = "https://api.openalex.org"
 _ARXIV_BASE = "http://export.arxiv.org/api/query"
+_CROSSREF_BASE = "https://api.crossref.org"
 
 
 def _session() -> requests.Session:
     global _SESSION
     if _SESSION is None:
         _SESSION = requests.Session()
-        _SESSION.headers["User-Agent"] = "hallubib/0.1 (bibliography checker)"
+        _SESSION.headers["User-Agent"] = (
+            "hallubib/0.1 (bibliography checker; mailto:hallubib@example.com)"
+        )
     return _SESSION
 
 
@@ -127,7 +137,10 @@ def search_openalex_doi(doi: str) -> OnlineRecord | None:
     try:
         r = _session().get(
             f"{_OPENALEX_BASE}/works/doi:{doi}",
-            params={"select": "title,display_name,authorships,doi,publication_year,primary_location,biblio"},
+            params={
+                "select": "title,display_name,authorships,doi,"
+                "publication_year,primary_location,biblio",
+            },
             timeout=15,
         )
         if r.status_code != 200:
@@ -139,9 +152,12 @@ def search_openalex_doi(doi: str) -> OnlineRecord | None:
         return None
 
 
-def search_openalex_title(title: str, year: int | None = None) -> list[OnlineRecord]:
+def search_openalex_title(
+    title: str, year: int | None = None, *, with_year_filter: bool = True,
+) -> list[OnlineRecord]:
     query = re.sub(r"[^\w\s]", "", title)[:200]
-    ck = cache.cache_key(f"openalex:title:{query}:{year}")
+    yr_key = year if with_year_filter else "any"
+    ck = cache.cache_key(f"openalex:title:{query}:{yr_key}")
     cached = cache.get("openalex", ck)
     if cached is not None:
         works = cached.get("results", [])
@@ -150,9 +166,10 @@ def search_openalex_title(title: str, year: int | None = None) -> list[OnlineRec
             params: dict[str, str | int] = {
                 "search": query,
                 "per_page": 5,
-                "select": "title,display_name,authorships,doi,publication_year,primary_location,biblio",
+                "select": "title,display_name,authorships,doi,"
+                "publication_year,primary_location,biblio",
             }
-            if year:
+            if year and with_year_filter:
                 params["filter"] = f"publication_year:{year - 1}-{year + 1}"
             r = _session().get(
                 f"{_OPENALEX_BASE}/works", params=params, timeout=15
@@ -239,36 +256,85 @@ def search_arxiv(title: str, first_author: str | None = None) -> list[OnlineReco
     return records
 
 
-# --- Matcher ---
+# --- Crossref ---
 
-JOURNAL_ABBREVS: dict[str, str] = {
-    "j. econ. theory": "journal of economic theory",
-    "am. econ. rev.": "american economic review",
-    "amer. math. monthly": "american mathematical monthly",
-    "j. polit. econ.": "journal of political economy",
-    "rev. econ. stat.": "review of economics and statistics",
-    "j. algorithms": "journal of algorithms",
-    "games econ. behav.": "games and economic behavior",
-    "manage. sci.": "management science",
-    "soc. choice welfare": "social choice and welfare",
-    "j. math. econ.": "journal of mathematical economics",
-    "j. appl. soc. psychol.": "journal of applied social psychology",
-    "j. housing econ.": "journal of housing economics",
-    "reg. sci. urban econ.": "regional science and urban economics",
-    "annu. rev. public health": "annual review of public health",
-    "annu. rev. sociol.": "annual review of sociology",
-    "inf. process. lett.": "information processing letters",
-    "discret. appl. math.": "discrete applied mathematics",
-    "theor. comput. sci.": "theoretical computer science",
-    "appl. opt.": "applied optics",
-}
+def _parse_crossref_item(item: dict) -> OnlineRecord | None:
+    titles = item.get("title", [])
+    if not titles:
+        return None
+    title = titles[0]
+    authors = []
+    for a in item.get("author", []):
+        family = a.get("family", "")
+        given = a.get("given", "")
+        if family:
+            authors.append(f"{family}, {given}" if given else family)
+    year = None
+    for date_field in ("published-print", "published-online", "issued"):
+        date_info = item.get(date_field)
+        if date_info:
+            parts = date_info.get("date-parts", [[]])
+            if parts and parts[0] and parts[0][0]:
+                year = parts[0][0]
+                break
+    containers = item.get("container-title", [])
+    journal = containers[0] if containers else None
+    doi = item.get("DOI")
+    return OnlineRecord(
+        source="crossref",
+        title=title,
+        authors=authors,
+        year=year,
+        journal=journal,
+        volume=item.get("volume"),
+        number=item.get("issue"),
+        pages=item.get("page"),
+        doi=doi,
+    )
 
+
+def search_crossref(title: str, first_author: str | None = None) -> list[OnlineRecord]:
+    query = re.sub(r"[^\w\s]", "", title)[:200]
+    author_q = _author_last(first_author) if first_author else ""
+    ck = cache.cache_key(f"crossref:{query}:{author_q}")
+    cached = cache.get("crossref", ck)
+    if cached is not None:
+        items = cached.get("items", [])
+    else:
+        try:
+            params: dict[str, str | int] = {
+                "query.title": query,
+                "rows": 5,
+                "select": "title,author,issued,published-print,"
+                "published-online,container-title,"
+                "volume,issue,page,DOI",
+            }
+            if author_q:
+                params["query.author"] = author_q
+            r = _session().get(
+                f"{_CROSSREF_BASE}/works", params=params, timeout=15,
+            )
+            if r.status_code != 200:
+                return []
+            data = r.json()
+            items = data.get("message", {}).get("items", [])
+            cache.put("crossref", ck, {"items": items})
+        except requests.RequestException:
+            return []
+    records = []
+    for item in items:
+        rec = _parse_crossref_item(item)
+        if rec:
+            records.append(rec)
+    return records
+
+
+# --- Journal matching ---
 
 def _norm_journal(j: str | None) -> str:
     if not j:
         return ""
-    n = _norm(j)
-    return JOURNAL_ABBREVS.get(n, n)
+    return expand_journal(j)
 
 
 def _journal_sim(a: str | None, b: str | None) -> float:
@@ -277,6 +343,8 @@ def _journal_sim(a: str | None, b: str | None) -> float:
         return 1.0
     return SequenceMatcher(None, na, nb).ratio()
 
+
+# --- Diff computation ---
 
 def _compute_diffs(ref: Reference, rec: OnlineRecord) -> list[FieldDiff]:
     diffs: list[FieldDiff] = []
@@ -287,19 +355,25 @@ def _compute_diffs(ref: Reference, rec: OnlineRecord) -> list[FieldDiff]:
             continue
         lstr = str(local) if local is not None else None
         ostr = str(online) if online is not None else None
-        if lstr != ostr and not (
-            field_name == "title" and lstr and ostr and _title_sim(lstr, ostr) > 0.95
-        ):
-            if field_name == "journal" and lstr and ostr and _journal_sim(lstr, ostr) > 0.9:
+        if lstr == ostr:
+            continue
+        if lstr is not None and ostr is None:
+            continue
+        if field_name == "title" and lstr and ostr and _title_sim(lstr, ostr) > 0.95:
+            continue
+        if field_name == "journal" and lstr and ostr and _journal_sim(lstr, ostr) > 0.9:
+            continue
+        if field_name == "pages" and lstr and ostr:
+            norm_l = re.sub(r"[-–—]+", "-", lstr).replace(" ", "")
+            norm_o = re.sub(r"[-–—]+", "-", ostr).replace(" ", "")
+            if norm_l == norm_o:
                 continue
-            if field_name == "pages" and lstr and ostr:
-                norm_l = re.sub(r"[-–—]+", "-", lstr).replace(" ", "")
-                norm_o = re.sub(r"[-–—]+", "-", ostr).replace(" ", "")
-                if norm_l == norm_o:
-                    continue
-            diffs.append(FieldDiff(field_name, lstr, ostr))
+        kind = DiffKind.SUPPLEMENT if lstr is None else DiffKind.CORRECTION
+        diffs.append(FieldDiff(field_name, lstr, ostr, kind))
     return diffs
 
+
+# --- Categorization ---
 
 def categorize(ref: Reference, candidates: list[OnlineRecord]) -> CheckResult:
     if not candidates:
@@ -313,7 +387,8 @@ def categorize(ref: Reference, candidates: list[OnlineRecord]) -> CheckResult:
     for c in candidates:
         tsim = _title_sim(ref.title, c.title)
         asim = _author_overlap(ref.authors, c.authors)
-        ysim = 1.0 if (not ref.year or not c.year or abs(ref.year - c.year) <= 1) else 0.0
+        year_close = not ref.year or not c.year or abs(ref.year - c.year) <= 1
+        ysim = 1.0 if year_close else 0.0
         score = tsim * 0.5 + asim * 0.3 + ysim * 0.2
         if score > best_score:
             best_score = score
@@ -333,16 +408,39 @@ def categorize(ref: Reference, candidates: list[OnlineRecord]) -> CheckResult:
     diffs = _compute_diffs(ref, best)
     suggestions = {d.field_name: d.online_value for d in diffs if d.online_value}
 
+    notes: list[str] = []
+    for d in diffs:
+        if d.field_name == "year" and d.kind == DiffKind.CORRECTION:
+            if d.local_value and d.online_value:
+                try:
+                    if abs(int(d.local_value) - int(d.online_value)) == 1:
+                        notes.append(
+                            "Year difference may be due to"
+                            " online-first vs. print"
+                        )
+                except ValueError:
+                    pass
+
     if tsim >= 0.90 and fa_match and year_ok and (jsim >= 0.8 or not ref.journal):
-        if not diffs:
-            return CheckResult(reference=ref, status=Status.VERIFIED, best_match=best)
+        ignorable = ignorable_supplements_for(ref)
+        corrections = [d for d in diffs if d.kind == DiffKind.CORRECTION]
+        significant_supplements = [
+            d for d in diffs
+            if d.kind == DiffKind.SUPPLEMENT and d.field_name not in ignorable
+        ]
+        if not corrections and not significant_supplements:
+            return CheckResult(
+                reference=ref, status=Status.VERIFIED,
+                best_match=best, diffs=diffs, suggestions=suggestions,
+                notes=notes,
+            )
         return CheckResult(
             reference=ref, status=Status.AUTO_CORRECTABLE,
             best_match=best, diffs=diffs, suggestions=suggestions,
+            notes=notes,
         )
 
     if tsim >= 0.70 or (fa_match and tsim >= 0.50):
-        notes: list[str] = []
         if tsim < 0.90:
             notes.append(f"Title similarity: {tsim:.0%}")
         if not fa_match:
@@ -363,6 +461,9 @@ def categorize(ref: Reference, candidates: list[OnlineRecord]) -> CheckResult:
 # --- Orchestration ---
 
 def _check_one(ref: Reference) -> CheckResult:
+    if is_url_only_reference(ref):
+        return _check_url_reference(ref)
+
     candidates: list[OnlineRecord] = []
 
     if ref.doi:
@@ -382,7 +483,45 @@ def _check_one(ref: Reference) -> CheckResult:
         first_author = ref.authors[0] if ref.authors else None
         candidates.extend(search_arxiv(ref.title, first_author))
 
-    return categorize(ref, candidates)
+    result = categorize(ref, candidates)
+    if result.status == Status.UNKNOWN:
+        first_author = ref.authors[0] if ref.authors else None
+        crossref_results = search_crossref(ref.title, first_author)
+        if crossref_results:
+            candidates.extend(crossref_results)
+            result = categorize(ref, candidates)
+
+    if result.status == Status.UNKNOWN and ref.year:
+        wider = search_openalex_title(ref.title, ref.year, with_year_filter=False)
+        if wider:
+            candidates.extend(wider)
+            result = categorize(ref, candidates)
+
+    return result
+
+
+def _check_url_reference(ref: Reference) -> CheckResult:
+    url = ref.url or ""
+    source_type = detect_source_type(url)
+    reachable = validate_url(url, _session()) if url else False
+    notes: list[str] = []
+    if source_type == "github":
+        notes.append(f"GitHub repository: {url}")
+    elif source_type == "arxiv":
+        notes.append(f"arXiv: {url}")
+    else:
+        notes.append(f"URL: {url}")
+
+    if reachable:
+        notes.append("URL is reachable")
+        return CheckResult(
+            reference=ref, status=Status.URL_REFERENCE, notes=notes,
+        )
+    else:
+        notes.append("URL is not reachable")
+        return CheckResult(
+            reference=ref, status=Status.UNKNOWN, notes=notes,
+        )
 
 
 def check_references(refs: list[Reference], max_workers: int = 6) -> list[CheckResult]:
