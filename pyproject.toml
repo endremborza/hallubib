@@ -1,0 +1,22 @@
+[project]
+name = "hallubib"
+description = "Check bibliography for hallucinations"
+dynamic = ["version"]
+authors = [{name = "Endre Márk Borza", email = "endremborza@gmail.com"}]
+license = {file = "LICENSE"}
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/endremborza/hallubib"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "hallubib/__init__.py"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
