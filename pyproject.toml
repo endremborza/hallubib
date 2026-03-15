@@ -6,7 +6,12 @@ authors = [{name = "Endre Márk Borza", email = "endremborza@gmail.com"}]
 license = {file = "LICENSE"}
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "requests>=2.31",
+]
+
+[project.scripts]
+hallubib = "hallubib.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/endremborza/hallubib"
@@ -20,3 +25,12 @@ path = "hallubib/__init__.py"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["network: tests that require network access"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
