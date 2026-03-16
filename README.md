@@ -9,16 +9,8 @@ Check bibliography references for hallucinations. Parses `.bib` and `.tex` files
 ```bash
 # With uv (recommended)
 uv tool install hallubib
-
 # Or with pip
 pip install hallubib
-```
-
-For development:
-```bash
-git clone https://github.com/endremborza/hallubib
-cd hallubib
-uv sync
 ```
 
 ## Usage
