@@ -220,7 +220,21 @@ def format_html(results: list[CheckResult], filename: str) -> str:
                     f"<em>(missing)</em> → <code>{ov}</code></p>"
                 )
             for note in r.notes:
-                parts.append(f'<p class="detail">{_html_escape(note)}</p>')
+                if note == "First author mismatch" and r.best_match:
+                    local_authors = ", ".join(
+                        _html_escape(a) for a in ref.authors
+                    ) if ref.authors else "<em>none</em>"
+                    online_authors = ", ".join(
+                        _html_escape(a) for a in r.best_match.authors
+                    ) if r.best_match.authors else "<em>none</em>"
+                    parts.append(
+                        f'<p class="detail correction">'
+                        f"<strong>First author mismatch</strong><br>"
+                        f"Local: {local_authors}<br>"
+                        f"Online: {online_authors}</p>"
+                    )
+                else:
+                    parts.append(f'<p class="detail">{_html_escape(note)}</p>')
             parts.append("</div>")
 
     parts.append("</body></html>")

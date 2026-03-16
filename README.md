@@ -2,7 +2,7 @@
 
 [![pypi](https://img.shields.io/pypi/v/hallubib.svg)](https://pypi.org/project/hallubib/)
 
-Check bibliography references for hallucinations. Parses `.bib` and `.tex` files, verifies each reference against online sources (OpenAlex, Crossref, arXiv, DOI resolution), and categorizes them by confidence.
+Check bibliography references for hallucinations. Parses `.bib` and `.tex` files, verifies each reference against online sources (OpenAlex, Semantic Scholar, Crossref, arXiv, DOI resolution), and categorizes them by confidence.
 
 ## Installation
 
@@ -59,7 +59,7 @@ Each reference is checked against online sources in this order:
 1. **DOI validation**: If a DOI is present, verify it resolves via `doi.org`
 2. **OpenAlex lookup**: Search by DOI (fast path) or by title (full-text search with ±1 year filter)
 3. **arXiv search**: For arXiv-linked papers or as fallback when OpenAlex yields nothing
-4. **Crossref fallback**: If no good match found, search Crossref for broader coverage
+4. **Crossref + Semantic Scholar fallback**: If not yet verified/auto-correctable, search both for broader coverage (especially older papers without DOIs)
 5. **Wider search**: If still unknown, retry OpenAlex without year filter
 
 URL-only references (GitHub repos, websites) are validated for reachability instead of bibliographic matching.
@@ -132,7 +132,7 @@ Only one runtime dependency:
 ## Features
 
 - Parses both `.bib` (structured BibTeX) and `.tex` (`\bibitem` free-text) formats
-- Verifies against OpenAlex, Crossref, and arXiv with DOI cross-validation
+- Verifies against OpenAlex, Semantic Scholar, Crossref, and arXiv with DOI cross-validation
 - Crossref fallback and wider search for papers not found initially
 - URL-only reference detection with reachability validation (GitHub, websites)
 - GitHub repository and arXiv detection as extensible special cases (`special.py`)
@@ -153,7 +153,20 @@ Only one runtime dependency:
 - [ ] **Rate limiting**: API sources are polled concurrently with a thread pool cap of 6. For very large bibliographies (100+ entries), more sophisticated rate limiting or backoff may be needed.
 - [ ] **`\cite{}` extraction from `.tex`**: Currently only `\bibitem` entries in `thebibliography` environments are parsed. Support for `\cite{key}` + external `.bib` file resolution is not yet implemented.
 - [ ] **BibTeX output mode**: Generate a corrected `.bib` file with suggested fixes applied.
-- [ ] **Hard-to-find papers**: Some papers remain hard to find across all sources. In test data, `mongell91` (Mongell & Roth, "Sorority rush as a two-sided matching mechanism", Am. Econ. Rev. 1991) could not be matched by any source. Papers like `hurwicz73` and `cechlárová02` match to different editions/versions. Adding Google Scholar or Semantic Scholar as additional sources could help, but neither offers a free unrestricted API.
+- [ ] **Hard-to-find papers**: Some papers remain hard to find across all sources. In test data, `mongell91` (Mongell & Roth, "Sorority rush as a two-sided matching mechanism", Am. Econ. Rev. 1991) could not be matched by any source.
+
+## Possible future sources
+
+Additional APIs that could improve coverage further:
+
+| Source | Notes |
+|--------|-------|
+| **DBLP** | Free, no auth. CS-only (~6M entries). Useful if targeting CS bibliographies. |
+| **PubMed / NCBI E-utilities** | Free (3 RPS with API key). Biomedical only. |
+| **OpenCitations** | Free, fully open. Citation graph metadata, less useful for discovery by title. |
+| **Scopus** | Broad coverage (~90M records), but requires institutional API key. |
+| **Google Scholar** | Best coverage overall, but no API — scraping violates TOS. |
+| **JSTOR** | No free public lookup API. Data for Research (DfR) is bulk-download only; XML Gateway requires institutional license. |
 
 ## Running tests
 

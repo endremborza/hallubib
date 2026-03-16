@@ -1,4 +1,4 @@
-"""Verify references against OpenAlex, arXiv, Crossref, and DOI resolution."""
+"""Verify references against OpenAlex, Semantic Scholar, arXiv, Crossref, and DOI resolution."""
 
 import re
 import unicodedata
@@ -22,6 +22,7 @@ _SESSION: requests.Session | None = None
 _OPENALEX_BASE = "https://api.openalex.org"
 _ARXIV_BASE = "http://export.arxiv.org/api/query"
 _CROSSREF_BASE = "https://api.crossref.org"
+_SEMSCHOLAR_BASE = "https://api.semanticscholar.org/graph/v1"
 
 
 def _session() -> requests.Session:
@@ -329,6 +330,74 @@ def search_crossref(title: str, first_author: str | None = None) -> list[OnlineR
     return records
 
 
+# --- Semantic Scholar ---
+
+_SEMSCHOLAR_FIELDS = "title,authors,year,journal,externalIds"
+
+
+def _parse_semscholar_paper(paper: dict) -> OnlineRecord | None:
+    title = paper.get("title")
+    if not title:
+        return None
+    authors = []
+    for a in paper.get("authors") or []:
+        name = a.get("name", "")
+        if not name:
+            continue
+        parts = name.split()
+        if len(parts) >= 2:
+            authors.append(f"{parts[-1]}, {' '.join(parts[:-1])}")
+        else:
+            authors.append(name)
+    ext_ids = paper.get("externalIds") or {}
+    doi = ext_ids.get("DOI")
+    journal_info = paper.get("journal") or {}
+    journal = journal_info.get("name")
+    volume = journal_info.get("volume")
+    pages = journal_info.get("pages")
+    return OnlineRecord(
+        source="semanticscholar",
+        title=title,
+        authors=authors,
+        year=paper.get("year"),
+        journal=journal,
+        volume=volume,
+        pages=pages,
+        doi=doi,
+    )
+
+
+def search_semscholar(
+    title: str, first_author: str | None = None,
+) -> list[OnlineRecord]:
+    query = title[:300]
+    author_q = _author_last(first_author) if first_author else ""
+    ck = cache.cache_key(f"semscholar:{query}:{author_q}")
+    cached = cache.get("semscholar", ck)
+    if cached is not None:
+        papers = cached.get("data", [])
+    else:
+        try:
+            r = _session().get(
+                f"{_SEMSCHOLAR_BASE}/paper/search/match",
+                params={"query": query, "fields": _SEMSCHOLAR_FIELDS},
+                timeout=15,
+            )
+            if r.status_code != 200:
+                return []
+            data = r.json()
+            papers = data.get("data", [])
+            cache.put("semscholar", ck, {"data": papers})
+        except requests.RequestException:
+            return []
+    records = []
+    for p in papers:
+        rec = _parse_semscholar_paper(p)
+        if rec:
+            records.append(rec)
+    return records
+
+
 # --- Journal matching ---
 
 def _norm_journal(j: str | None) -> str:
@@ -484,11 +553,13 @@ def _check_one(ref: Reference) -> CheckResult:
         candidates.extend(search_arxiv(ref.title, first_author))
 
     result = categorize(ref, candidates)
-    if result.status == Status.UNKNOWN:
+    if result.status not in (Status.VERIFIED, Status.AUTO_CORRECTABLE):
         first_author = ref.authors[0] if ref.authors else None
         crossref_results = search_crossref(ref.title, first_author)
-        if crossref_results:
+        semscholar_results = search_semscholar(ref.title, first_author)
+        if crossref_results or semscholar_results:
             candidates.extend(crossref_results)
+            candidates.extend(semscholar_results)
             result = categorize(ref, candidates)
 
     if result.status == Status.UNKNOWN and ref.year:
