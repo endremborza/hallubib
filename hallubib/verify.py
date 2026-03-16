@@ -1,4 +1,5 @@
-"""Verify references against OpenAlex, Semantic Scholar, arXiv, Crossref, and DOI resolution."""
+"""Verify references against OpenAlex, Semantic Scholar, arXiv, Crossref,
+and DOI resolution."""
 
 import re
 import unicodedata
@@ -37,8 +38,7 @@ def _session() -> requests.Session:
 
 def _strip_accents(s: str) -> str:
     return "".join(
-        c for c in unicodedata.normalize("NFD", s)
-        if unicodedata.category(c) != "Mn"
+        c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn"
     )
 
 
@@ -78,15 +78,14 @@ def _author_overlap(ref_authors: list[str], online_authors: list[str]) -> float:
 
 # --- DOI ---
 
+
 def validate_doi(doi: str) -> bool:
     ck = cache.cache_key(f"doi:{doi}")
     cached = cache.get("doi", ck)
     if cached is not None:
         return cached.get("valid", False)
     try:
-        r = _session().head(
-            f"https://doi.org/{doi}", allow_redirects=True, timeout=10
-        )
+        r = _session().head(f"https://doi.org/{doi}", allow_redirects=True, timeout=10)
         valid = r.status_code < 400
     except requests.RequestException:
         valid = False
@@ -95,6 +94,7 @@ def validate_doi(doi: str) -> bool:
 
 
 # --- OpenAlex ---
+
 
 def _parse_openalex_work(w: dict) -> OnlineRecord | None:
     title = w.get("title") or w.get("display_name")
@@ -125,7 +125,8 @@ def _parse_openalex_work(w: dict) -> OnlineRecord | None:
         volume=bib.get("volume"),
         number=bib.get("issue"),
         pages=f"{bib['first_page']}-{bib['last_page']}"
-        if bib.get("first_page") and bib.get("last_page") else None,
+        if bib.get("first_page") and bib.get("last_page")
+        else None,
         doi=doi,
     )
 
@@ -154,7 +155,10 @@ def search_openalex_doi(doi: str) -> OnlineRecord | None:
 
 
 def search_openalex_title(
-    title: str, year: int | None = None, *, with_year_filter: bool = True,
+    title: str,
+    year: int | None = None,
+    *,
+    with_year_filter: bool = True,
 ) -> list[OnlineRecord]:
     query = re.sub(r"[^\w\s]", "", title)[:200]
     yr_key = year if with_year_filter else "any"
@@ -172,9 +176,7 @@ def search_openalex_title(
             }
             if year and with_year_filter:
                 params["filter"] = f"publication_year:{year - 1}-{year + 1}"
-            r = _session().get(
-                f"{_OPENALEX_BASE}/works", params=params, timeout=15
-            )
+            r = _session().get(f"{_OPENALEX_BASE}/works", params=params, timeout=15)
             if r.status_code != 200:
                 return []
             data = r.json()
@@ -231,9 +233,14 @@ def search_arxiv(title: str, first_author: str | None = None) -> list[OnlineReco
                 if doi_el is not None:
                     href = doi_el.get("href", "")
                     doi = re.sub(r"^https?://doi\.org/", "", href) if href else None
-                entries_raw.append({
-                    "title": t, "authors": authors, "year": year, "doi": doi,
-                })
+                entries_raw.append(
+                    {
+                        "title": t,
+                        "authors": authors,
+                        "year": year,
+                        "doi": doi,
+                    }
+                )
             cache.put("arxiv", ck, {"entries": entries_raw})
         except (requests.RequestException, ET.ParseError):
             return []
@@ -247,17 +254,20 @@ def search_arxiv(title: str, first_author: str | None = None) -> list[OnlineReco
                 auth_list.append(f"{parts[-1]}, {' '.join(parts[:-1])}")
             else:
                 auth_list.append(a)
-        records.append(OnlineRecord(
-            source="arxiv",
-            title=e["title"],
-            authors=auth_list,
-            year=e.get("year"),
-            doi=e.get("doi"),
-        ))
+        records.append(
+            OnlineRecord(
+                source="arxiv",
+                title=e["title"],
+                authors=auth_list,
+                year=e.get("year"),
+                doi=e.get("doi"),
+            )
+        )
     return records
 
 
 # --- Crossref ---
+
 
 def _parse_crossref_item(item: dict) -> OnlineRecord | None:
     titles = item.get("title", [])
@@ -313,7 +323,9 @@ def search_crossref(title: str, first_author: str | None = None) -> list[OnlineR
             if author_q:
                 params["query.author"] = author_q
             r = _session().get(
-                f"{_CROSSREF_BASE}/works", params=params, timeout=15,
+                f"{_CROSSREF_BASE}/works",
+                params=params,
+                timeout=15,
             )
             if r.status_code != 200:
                 return []
@@ -368,7 +380,8 @@ def _parse_semscholar_paper(paper: dict) -> OnlineRecord | None:
 
 
 def search_semscholar(
-    title: str, first_author: str | None = None,
+    title: str,
+    first_author: str | None = None,
 ) -> list[OnlineRecord]:
     query = title[:300]
     author_q = _author_last(first_author) if first_author else ""
@@ -400,6 +413,7 @@ def search_semscholar(
 
 # --- Journal matching ---
 
+
 def _norm_journal(j: str | None) -> str:
     if not j:
         return ""
@@ -414,6 +428,7 @@ def _journal_sim(a: str | None, b: str | None) -> float:
 
 
 # --- Diff computation ---
+
 
 def _compute_diffs(ref: Reference, rec: OnlineRecord) -> list[FieldDiff]:
     diffs: list[FieldDiff] = []
@@ -444,10 +459,12 @@ def _compute_diffs(ref: Reference, rec: OnlineRecord) -> list[FieldDiff]:
 
 # --- Categorization ---
 
+
 def categorize(ref: Reference, candidates: list[OnlineRecord]) -> CheckResult:
     if not candidates:
         return CheckResult(
-            reference=ref, status=Status.UNKNOWN,
+            reference=ref,
+            status=Status.UNKNOWN,
             notes=["No matching records found online"],
         )
 
@@ -465,7 +482,8 @@ def categorize(ref: Reference, candidates: list[OnlineRecord]) -> CheckResult:
 
     if best is None:
         return CheckResult(
-            reference=ref, status=Status.UNKNOWN,
+            reference=ref,
+            status=Status.UNKNOWN,
             notes=["No matching records found online"],
         )
 
@@ -484,8 +502,7 @@ def categorize(ref: Reference, candidates: list[OnlineRecord]) -> CheckResult:
                 try:
                     if abs(int(d.local_value) - int(d.online_value)) == 1:
                         notes.append(
-                            "Year difference may be due to"
-                            " online-first vs. print"
+                            "Year difference may be due to online-first vs. print"
                         )
                 except ValueError:
                     pass
@@ -494,18 +511,25 @@ def categorize(ref: Reference, candidates: list[OnlineRecord]) -> CheckResult:
         ignorable = ignorable_supplements_for(ref)
         corrections = [d for d in diffs if d.kind == DiffKind.CORRECTION]
         significant_supplements = [
-            d for d in diffs
+            d
+            for d in diffs
             if d.kind == DiffKind.SUPPLEMENT and d.field_name not in ignorable
         ]
         if not corrections and not significant_supplements:
             return CheckResult(
-                reference=ref, status=Status.VERIFIED,
-                best_match=best, diffs=diffs, suggestions=suggestions,
+                reference=ref,
+                status=Status.VERIFIED,
+                best_match=best,
+                diffs=diffs,
+                suggestions=suggestions,
                 notes=notes,
             )
         return CheckResult(
-            reference=ref, status=Status.AUTO_CORRECTABLE,
-            best_match=best, diffs=diffs, suggestions=suggestions,
+            reference=ref,
+            status=Status.AUTO_CORRECTABLE,
+            best_match=best,
+            diffs=diffs,
+            suggestions=suggestions,
             notes=notes,
         )
 
@@ -517,17 +541,24 @@ def categorize(ref: Reference, candidates: list[OnlineRecord]) -> CheckResult:
         if not year_ok:
             notes.append(f"Year mismatch: local={ref.year}, online={best.year}")
         return CheckResult(
-            reference=ref, status=Status.NEEDS_ATTENTION,
-            best_match=best, diffs=diffs, suggestions=suggestions, notes=notes,
+            reference=ref,
+            status=Status.NEEDS_ATTENTION,
+            best_match=best,
+            diffs=diffs,
+            suggestions=suggestions,
+            notes=notes,
         )
 
     return CheckResult(
-        reference=ref, status=Status.UNKNOWN, best_match=best,
+        reference=ref,
+        status=Status.UNKNOWN,
+        best_match=best,
         notes=[f"Best candidate title similarity: {tsim:.0%}"],
     )
 
 
 # --- Orchestration ---
+
 
 def _check_one(ref: Reference) -> CheckResult:
     if is_url_only_reference(ref):
@@ -586,12 +617,16 @@ def _check_url_reference(ref: Reference) -> CheckResult:
     if reachable:
         notes.append("URL is reachable")
         return CheckResult(
-            reference=ref, status=Status.URL_REFERENCE, notes=notes,
+            reference=ref,
+            status=Status.URL_REFERENCE,
+            notes=notes,
         )
     else:
         notes.append("URL is not reachable")
         return CheckResult(
-            reference=ref, status=Status.UNKNOWN, notes=notes,
+            reference=ref,
+            status=Status.UNKNOWN,
+            notes=notes,
         )
 
 
@@ -605,7 +640,8 @@ def check_references(refs: list[Reference], max_workers: int = 6) -> list[CheckR
                 results[idx] = fut.result()
             except Exception as e:
                 results[idx] = CheckResult(
-                    reference=refs[idx], status=Status.UNKNOWN,
+                    reference=refs[idx],
+                    status=Status.UNKNOWN,
                     notes=[f"Error during verification: {e}"],
                 )
     return results

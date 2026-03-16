@@ -45,6 +45,7 @@ def put(namespace: str, key: str, data: dict) -> None:
 
 def clear() -> None:
     import shutil
+
     d = _cache_dir()
     if d.exists():
         shutil.rmtree(d)

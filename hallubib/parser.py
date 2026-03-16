@@ -7,10 +7,20 @@ from pathlib import Path
 from .types import EntryKind, Reference
 
 LATEX_ACCENT_MAP: dict[str, str] = {
-    "`": "\u0300", "'": "\u0301", "^": "\u0302", "~": "\u0303",
-    "=": "\u0304", "u": "\u0306", ".": "\u0307", '"': "\u0308",
-    "r": "\u030A", "H": "\u030B", "v": "\u030C", "d": "\u0323",
-    "c": "\u0327", "k": "\u0328",
+    "`": "\u0300",
+    "'": "\u0301",
+    "^": "\u0302",
+    "~": "\u0303",
+    "=": "\u0304",
+    "u": "\u0306",
+    ".": "\u0307",
+    '"': "\u0308",
+    "r": "\u030a",
+    "H": "\u030b",
+    "v": "\u030c",
+    "d": "\u0323",
+    "c": "\u0327",
+    "k": "\u0328",
 }
 
 _ENTRY_KIND_MAP: dict[str, EntryKind] = {
@@ -21,9 +31,7 @@ _ENTRY_KIND_MAP: dict[str, EntryKind] = {
     "incollection": EntryKind.INCOLLECTION,
 }
 
-_BIB_ENTRY_RE = re.compile(
-    r"@(\w+)\s*\{\s*([^,\s]+)\s*,", re.IGNORECASE
-)
+_BIB_ENTRY_RE = re.compile(r"@(\w+)\s*\{\s*([^,\s]+)\s*,", re.IGNORECASE)
 _BIB_FIELD_RE = re.compile(
     r"(\w+)\s*=\s*(?:\{((?:[^{}]|\{[^{}]*\})*)\}|\"([^\"]*)\")",
     re.DOTALL,
@@ -116,7 +124,7 @@ def parse_bib(text: str) -> list[Reference]:
             elif text[pos] == "}":
                 depth -= 1
             pos += 1
-        body = text[start:pos - 1] if depth == 0 else text[start:]
+        body = text[start : pos - 1] if depth == 0 else text[start:]
 
         fields: dict[str, str] = {}
         for fm in _BIB_FIELD_RE.finditer(body):
@@ -127,28 +135,29 @@ def parse_bib(text: str) -> list[Reference]:
         title = _extract_bib_field(fields, "title") or ""
         authors = split_authors(fields.get("author", ""))
         year = _parse_year(fields.get("year"))
-        journal = (
-            _extract_bib_field(fields, "journal")
-            or _extract_bib_field(fields, "booktitle")
+        journal = _extract_bib_field(fields, "journal") or _extract_bib_field(
+            fields, "booktitle"
         )
         doi_raw = fields.get("doi")
         doi = latex_to_unicode(doi_raw).strip() if doi_raw else None
         url = _extract_bib_field(fields, "url")
 
-        refs.append(Reference(
-            key=key,
-            entry_kind=kind,
-            title=title,
-            authors=authors,
-            year=year,
-            journal=journal,
-            volume=_extract_bib_field(fields, "volume"),
-            number=_extract_bib_field(fields, "number"),
-            pages=_extract_bib_field(fields, "pages"),
-            doi=doi,
-            url=url,
-            raw=body.strip(),
-        ))
+        refs.append(
+            Reference(
+                key=key,
+                entry_kind=kind,
+                title=title,
+                authors=authors,
+                year=year,
+                journal=journal,
+                volume=_extract_bib_field(fields, "volume"),
+                number=_extract_bib_field(fields, "number"),
+                pages=_extract_bib_field(fields, "pages"),
+                doi=doi,
+                url=url,
+                raw=body.strip(),
+            )
+        )
     return refs
 
 
@@ -174,14 +183,16 @@ def parse_tex(text: str) -> list[Reference]:
         title = ""
         authors_raw: list[str] = []
         if year_m:
-            before_year = clean[:year_m.start()].strip().rstrip(",. ")
-            after_year = clean[year_m.end():].strip().lstrip(".) ")
+            before_year = clean[: year_m.start()].strip().rstrip(",. ")
+            after_year = clean[year_m.end() :].strip().lstrip(".) ")
             if before_year:
                 parts = re.split(r"\.\s+", before_year, maxsplit=1)
                 if len(parts) >= 1:
-                    authors_raw = [normalize_author(a.strip()) for a in
-                                   re.split(r",\s*(?:&|and)\s*|,\s+", parts[0])
-                                   if a.strip() and not a.strip().startswith("...")]
+                    authors_raw = [
+                        normalize_author(a.strip())
+                        for a in re.split(r",\s*(?:&|and)\s*|,\s+", parts[0])
+                        if a.strip() and not a.strip().startswith("...")
+                    ]
             if after_year:
                 sentences = re.split(r"\.\s+", after_year, maxsplit=1)
                 title = sentences[0].strip().rstrip(".")
@@ -199,25 +210,27 @@ def parse_tex(text: str) -> list[Reference]:
         if journal_part:
             vol_m = re.search(r"(\d+)\s*\(", journal_part)
             if vol_m:
-                journal = journal_part[:vol_m.start()].strip().rstrip(",")
+                journal = journal_part[: vol_m.start()].strip().rstrip(",")
                 volume = vol_m.group(1)
             pages_m = re.search(r"(\d+[-–]\d+)", journal_part)
             if pages_m:
                 pages = pages_m.group(1)
 
-        refs.append(Reference(
-            key=key,
-            entry_kind=EntryKind.MISC,
-            title=title,
-            authors=authors_raw,
-            year=year,
-            journal=journal,
-            volume=volume,
-            pages=pages,
-            doi=doi,
-            url=url,
-            raw=raw_body,
-        ))
+        refs.append(
+            Reference(
+                key=key,
+                entry_kind=EntryKind.MISC,
+                title=title,
+                authors=authors_raw,
+                year=year,
+                journal=journal,
+                volume=volume,
+                pages=pages,
+                doi=doi,
+                url=url,
+                raw=raw_body,
+            )
+        )
     return refs
 
 

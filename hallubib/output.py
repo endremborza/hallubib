@@ -172,8 +172,7 @@ def format_html(results: list[CheckResult], filename: str) -> str:
         for r in group:
             ref = r.reference
             author_str = (
-                _html_escape(ref.authors[0].split(",")[0])
-                if ref.authors else "?"
+                _html_escape(ref.authors[0].split(",")[0]) if ref.authors else "?"
             )
             year_str = str(ref.year) if ref.year else "?"
             title_str = _html_escape(ref.title[:100])
@@ -188,9 +187,7 @@ def format_html(results: list[CheckResult], filename: str) -> str:
                 src = _html_escape(r.best_match.source)
                 mt = _html_escape(r.best_match.title)
                 parts.append(
-                    f'<p class="detail">'
-                    f"<strong>Matched:</strong>"
-                    f" {src} — {mt}</p>"
+                    f'<p class="detail"><strong>Matched:</strong> {src} — {mt}</p>'
                 )
                 if r.best_match.doi:
                     doi = _html_escape(r.best_match.doi)
@@ -205,7 +202,7 @@ def format_html(results: list[CheckResult], filename: str) -> str:
                 if d.field_name == "year" and d.local_value and d.online_value:
                     try:
                         if abs(int(d.local_value) - int(d.online_value)) == 1:
-                            extra = ' <em>(online-first vs. print)</em>'
+                            extra = " <em>(online-first vs. print)</em>"
                     except ValueError:
                         pass
                 parts.append(
@@ -221,12 +218,16 @@ def format_html(results: list[CheckResult], filename: str) -> str:
                 )
             for note in r.notes:
                 if note == "First author mismatch" and r.best_match:
-                    local_authors = ", ".join(
-                        _html_escape(a) for a in ref.authors
-                    ) if ref.authors else "<em>none</em>"
-                    online_authors = ", ".join(
-                        _html_escape(a) for a in r.best_match.authors
-                    ) if r.best_match.authors else "<em>none</em>"
+                    local_authors = (
+                        ", ".join(_html_escape(a) for a in ref.authors)
+                        if ref.authors
+                        else "<em>none</em>"
+                    )
+                    online_authors = (
+                        ", ".join(_html_escape(a) for a in r.best_match.authors)
+                        if r.best_match.authors
+                        else "<em>none</em>"
+                    )
                     parts.append(
                         f'<p class="detail correction">'
                         f"<strong>First author mismatch</strong><br>"

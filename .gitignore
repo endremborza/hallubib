@@ -117,3 +117,9 @@ dmypy.json
 .idea
 .vscode
 dask-worker-space/
+
+# Private test suite and data
+tests_private/
+test-docs/
+scripts/
+prompt.md

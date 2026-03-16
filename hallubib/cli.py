@@ -17,15 +17,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("file", nargs="?", type=Path, help=".bib or .tex file to check")
     parser.add_argument(
-        "--output", choices=["stdout", "md", "html"], default="stdout",
+        "--output",
+        choices=["stdout", "md", "html"],
+        default="stdout",
         help="output format (default: stdout)",
     )
     parser.add_argument(
-        "--clear-cache", action="store_true",
+        "--clear-cache",
+        action="store_true",
         help="clear the cache and exit",
     )
     parser.add_argument(
-        "--version", action="version",
+        "--version",
+        action="version",
         version=f"hallubib {__version__}",
     )
     args = parser.parse_args(argv)
@@ -44,8 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if path.suffix not in (".bib", ".tex"):
         print(
-            f"Error: unsupported file type {path.suffix},"
-            " expected .bib or .tex",
+            f"Error: unsupported file type {path.suffix}, expected .bib or .tex",
             file=sys.stderr,
         )
         return 1
