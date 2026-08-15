@@ -1,6 +1,6 @@
 """Check bibliography for hallucinations"""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from .bib import entry_to_bib, to_bib
 from .config import Config, configure, get_config
