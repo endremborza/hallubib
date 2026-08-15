@@ -5,6 +5,7 @@ import re
 import requests
 
 from . import cache
+from .config import get_config
 from .types import Reference
 
 _GITHUB_REPO_RE = re.compile(r"github\.com/([^/\s]+/[^/,\s]+)")
@@ -44,12 +45,13 @@ def validate_url(url: str, session: requests.Session) -> bool:
     cached = cache.get("url_check", ck)
     if cached is not None:
         return cached.get("reachable", False)
+    timeout = get_config().timeout
     try:
-        r = session.head(url, allow_redirects=True, timeout=10)
+        r = session.head(url, allow_redirects=True, timeout=timeout)
         reachable = r.status_code < 400
     except requests.RequestException:
         try:
-            r = session.get(url, allow_redirects=True, timeout=10, stream=True)
+            r = session.get(url, allow_redirects=True, timeout=timeout, stream=True)
             reachable = r.status_code < 400
             r.close()
         except requests.RequestException:
