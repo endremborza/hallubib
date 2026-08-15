@@ -1,0 +1,114 @@
+% Golden bibliography for hallubib's replay and drift tests.
+% Each entry is chosen to exercise one path through verify.check_reference.
+% Entries are stable, long-published works; see tests/test_replay.py for the
+% expected outcome of each and why.
+
+% valid DOI, resolves and verifies straight away
+@article{galeshapley62,
+  title = {College Admissions and the Stability of Marriage},
+  author = {Gale, David and Shapley, Lloyd S.},
+  journal = {The American Mathematical Monthly},
+  year = {1962},
+  volume = {69},
+  number = {1},
+  pages = {9--15},
+  doi = {10.2307/2312726}
+}
+
+% no DOI, found by title search
+@article{hurwicz73,
+  title = {The Design of Mechanisms for Resource Allocation},
+  author = {Hurwicz, Leonid},
+  journal = {The American Economic Review},
+  year = {1973},
+  volume = {63},
+  number = {2},
+  pages = {1--30}
+}
+
+% arXiv preprint: arXiv is consulted even when other sources answer
+@article{vaswani17,
+  title = {Attention Is All You Need},
+  author = {Vaswani, Ashish and Shazeer, Noam and Parmar, Niki},
+  year = {2017},
+  url = {https://arxiv.org/abs/1706.03762}
+}
+
+% book: journal/volume/pages supplements are ignorable for this type
+@book{mascolell95,
+  title = {Microeconomic Theory},
+  author = {Mas-Colell, Andreu and Whinston, Michael D. and Green, Jerry R.},
+  publisher = {Oxford University Press},
+  year = {1995}
+}
+
+% book chapter
+@incollection{roth08,
+  title = {Deferred Acceptance Algorithms: History, Theory, Practice, and Open Questions},
+  author = {Roth, Alvin E.},
+  booktitle = {International Journal of Game Theory},
+  publisher = {Springer},
+  year = {2008}
+}
+
+% real paper, wrong volume -> auto-correctable
+@article{wrongvolume,
+  title = {The Evolution of the Labor Market for Medical Interns and Residents},
+  author = {Roth, Alvin E.},
+  journal = {Journal of Political Economy},
+  year = {1984},
+  volume = {11},
+  pages = {991--1016}
+}
+
+% real paper, year off by more than the tolerance -> needs attention
+@article{wrongyear,
+  title = {Pairwise Kidney Exchange},
+  author = {Roth, Alvin E. and S\"onmez, Tayfun and \"Unver, M. Utku},
+  journal = {Journal of Economic Theory},
+  year = {1998},
+  volume = {125},
+  pages = {151--188}
+}
+
+% syntactically valid DOI that is not registered
+@article{deaddoi,
+  title = {Two-Sided Matching: A Study in Game-Theoretic Modeling and Analysis},
+  author = {Roth, Alvin E. and Sotomayor, Marilda},
+  journal = {Cambridge University Press},
+  year = {1990},
+  doi = {10.9999/hallubib-not-a-real-doi}
+}
+
+% invented work: nothing online should match
+@article{hallucinated,
+  title = {Quantum Entanglement in Distributed Ledger Consensus Protocols},
+  author = {Fabricated, Aurelius Q.},
+  journal = {Journal of Imaginary Studies},
+  year = {2019},
+  volume = {42},
+  pages = {1--17}
+}
+
+% URL-only reference to a code repository
+@misc{githubrepo,
+  title = {OpenAlex},
+  author = {{OurResearch}},
+  howpublished = {\url{https://github.com/ourresearch/openalex-guts}},
+  url = {https://github.com/ourresearch/openalex-guts}
+}
+
+% URL-only reference to a plain website. example.com is IANA-reserved for
+% exactly this purpose, so its HEAD response is stable enough to pin.
+@misc{website,
+  title = {Example Domain},
+  author = {{IANA}},
+  url = {https://example.com/}
+}
+
+% URL-only reference that does not resolve
+@misc{deadlink,
+  title = {A Page That Is Not There},
+  author = {{Nobody}},
+  url = {https://example.com/hallubib-definitely-not-a-real-path}
+}
