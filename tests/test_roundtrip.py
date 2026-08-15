@@ -89,3 +89,29 @@ class TestCslShape:
     def test_structured_names_not_flattened(self, source_refs):
         authors = to_csl(source_refs[0])["author"]
         assert authors[0] == {"family": "Gale", "given": "David"}
+
+
+class TestBraceSafety:
+    """A stray brace in a value closes the entry early and corrupts the rest of
+    the file; matched braces (protected capitals, `{\\LaTeX}`) must survive."""
+
+    def _item(self, title: str) -> dict:
+        return {"id": "k", "type": "article-journal", "title": title}
+
+    def test_unmatched_closing_brace_is_escaped(self):
+        bib = to_bib([self._item("Effects of }} on parsing"), self._item("Second")])
+        parsed = parse_bib(bib)
+        assert [r.key for r in parsed] == ["k", "k"]
+        assert parsed[1].title == "Second"
+
+    def test_unmatched_opening_brace_is_escaped(self):
+        parsed = parse_bib(to_bib([self._item("A { dangling brace")]))
+        assert len(parsed) == 1
+
+    def test_matched_braces_pass_through(self):
+        bib = to_bib([self._item("The {DNA} of {\\LaTeX}")])
+        assert "{The {DNA} of {\\LaTeX}}" in bib
+
+    def test_trailing_backslash_cannot_escape_the_closing_brace(self):
+        parsed = parse_bib(to_bib([self._item("Path C:\\"), self._item("Second")]))
+        assert len(parsed) == 2

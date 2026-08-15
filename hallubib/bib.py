@@ -48,9 +48,39 @@ _CSL_VAR_TO_BIB = {
 }
 
 
+def _brace(value: str) -> str:
+    """Wrap a field value in braces, neutralizing anything that would unbalance it.
+
+    Values arrive from online records and hand-written .bib files. A stray `}`
+    there closes the entry early and corrupts everything after it on reparse, so
+    unmatched braces are escaped — matched ones (`{\\LaTeX}`, protected capitals)
+    are left exactly as the source wrote them.
+    """
+    return "{%s}" % _escape_unmatched(value)
+
+
+def _escape_unmatched(value: str) -> str:
+    opened: list[int] = []
+    unmatched: set[int] = set()
+    for i, char in enumerate(value):
+        if char == "{":
+            opened.append(i)
+        elif char == "}":
+            if opened:
+                opened.pop()
+            else:
+                unmatched.add(i)
+    unmatched.update(opened)
+    escaped = "".join(
+        "\\" + char if i in unmatched else char for i, char in enumerate(value)
+    )
+    trailing = len(escaped) - len(escaped.rstrip("\\"))
+    return escaped + "\\" if trailing % 2 else escaped
+
+
 def _bib_name(n: dict) -> str:
     if n.get("literal"):
-        return "{%s}" % n["literal"]
+        return _brace(n["literal"])
     family = n.get("family", "")
     given = n.get("given", "")
     return f"{family}, {given}" if given else family
@@ -113,7 +143,7 @@ def entry_to_bib(item: dict) -> str:
     ordered += [f for f in fields if f not in _FIELD_ORDER]
     lines = ["@%s{%s," % (btype, item.get("id", ""))]
     for f in ordered:
-        value = fields[f] if f == "month" else "{%s}" % fields[f]
+        value = fields[f] if f == "month" else _brace(fields[f])
         lines.append(f"  {f} = {value},")
     lines.append("}")
     return "\n".join(lines)
