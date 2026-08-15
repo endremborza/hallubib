@@ -38,6 +38,16 @@ from .types import (
     Status,
 )
 
+_RICHNESS_FIELDS = (
+    "journal",
+    "volume",
+    "number",
+    "pages",
+    "doi",
+    "abstract",
+    "publisher",
+)
+
 
 def _evidence(ref: Reference, c: OnlineRecord) -> tuple[float, MatchEvidence]:
     tsim = title_similarity(ref.title, c.title)
@@ -85,6 +95,14 @@ def _compute_diffs(ref: Reference, rec: OnlineRecord) -> list[FieldDiff]:
     return diffs
 
 
+def _confirms_doi(ref: Reference, c: OnlineRecord) -> bool:
+    return bool(ref.doi and c.doi and ref.doi.lower() == c.doi.lower())
+
+
+def _richness(c: OnlineRecord) -> int:
+    return sum(1 for f in _RICHNESS_FIELDS if _text(getattr(c, f)))
+
+
 def categorize(ref: Reference, candidates: list[OnlineRecord]) -> CheckResult:
     if not candidates:
         return CheckResult(
@@ -93,9 +111,18 @@ def categorize(ref: Reference, candidates: list[OnlineRecord]) -> CheckResult:
             notes=["No matching records found online"],
         )
 
+    # Sources return several manifestations of one work - preprint, tech report,
+    # version of record - which score alike. Prefer the one the reference's own
+    # DOI points at, then the fullest record; title only ever breaks a dead heat.
     scored = sorted(
         ((_evidence(ref, c), c) for c in candidates),
-        key=lambda pair: (-pair[0][0], pair[1].title, pair[1].source),
+        key=lambda pair: (
+            -pair[0][0],
+            0 if _confirms_doi(ref, pair[1]) else 1,
+            -_richness(pair[1]),
+            pair[1].title,
+            pair[1].source,
+        ),
     )
     (score, ev), best = scored[0]
     alternatives = [c for _, c in scored[1:]]
