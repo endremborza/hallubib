@@ -1,12 +1,26 @@
+import pytest
 import requests
 
+from hallubib import special
 from hallubib.special import (
     detect_source_type,
     ignorable_supplements_for,
+    is_public_url,
     is_url_only_reference,
     validate_url,
 )
 from hallubib.types import Reference
+
+
+def _resolves_to(address: str):
+    return lambda host, _port: [(0, 0, 0, "", (address, 0))]
+
+
+@pytest.fixture(autouse=True)
+def _public_dns(monkeypatch: pytest.MonkeyPatch):
+    """Resolve every test host to a public address: no DNS in unit tests, and the
+    guard's own tests stub their own mapping."""
+    monkeypatch.setattr(special.socket, "getaddrinfo", _resolves_to("93.184.216.34"))
 
 
 def _make_ref(**kwargs) -> Reference:
@@ -76,8 +90,10 @@ class TestIgnorableSupplements:
 
 
 class _FakeResponse:
-    def __init__(self, status_code: int):
+    def __init__(self, status_code: int, location: str | None = None):
         self.status_code = status_code
+        self.headers = {"Location": location} if location else {}
+        self.is_redirect = bool(location)
         self.closed = False
 
     def close(self) -> None:
@@ -150,4 +166,45 @@ class TestValidateUrl:
         s = _FakeSession(head=_TIMEOUT, get=_TIMEOUT)
         assert not validate_url("https://example.org/h", s)
         assert not validate_url("https://example.org/h", s)
+        assert s.head_calls == 1
+
+
+class TestPublicUrlGuard:
+    """A bibliography is untrusted input: it must not steer us onto a private
+    network, directly or through a redirect."""
+
+    def test_public_host_allowed(self):
+        assert is_public_url("https://example.org/paper")
+
+    def test_private_address_refused(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(special.socket, "getaddrinfo", _resolves_to("127.0.0.1"))
+        assert not is_public_url("https://internal.example/paper")
+
+    def test_link_local_metadata_refused(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(
+            special.socket, "getaddrinfo", _resolves_to("169.254.169.254")
+        )
+        assert not is_public_url("http://169.254.169.254/latest/meta-data/")
+
+    def test_non_http_scheme_refused(self):
+        assert not is_public_url("file:///etc/passwd")
+        assert not is_public_url("gopher://example.org/")
+
+    def test_private_host_is_never_requested(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(special.socket, "getaddrinfo", _resolves_to("10.0.0.5"))
+        s = _FakeSession(head=_FakeResponse(200))
+        assert not validate_url("https://intranet.example/x", s)
+        assert s.head_calls == 0
+
+    def test_redirect_into_the_private_network_is_not_followed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        hosts = {"public.example": "93.184.216.34", "intranet.example": "10.0.0.5"}
+        monkeypatch.setattr(
+            special.socket,
+            "getaddrinfo",
+            lambda host, _port: [(0, 0, 0, "", (hosts[host], 0))],
+        )
+        s = _FakeSession(head=_FakeResponse(302, "https://intranet.example/secret"))
+        assert not validate_url("https://public.example/r", s)
         assert s.head_calls == 1
