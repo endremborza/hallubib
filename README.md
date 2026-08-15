@@ -126,9 +126,9 @@ CSL-JSON is the boundary format: `to_csl(ref_or_record, key=None)` and `from_csl
 
 ## Configuration
 
-`configure(...)` swaps a frozen `Config`: `mailto` (polite pools; also `HALLUBIB_MAILTO`), `cache_dir`, `cache_ttl_days`, `timeout`, `max_workers`, `s2_api_key` (also `S2_API_KEY`).
+`configure(...)` swaps a frozen `Config`: `mailto` (polite pools; also `HALLUBIB_MAILTO`), `cache_dir`, `cache_ttl_days`, `timeout`, `max_workers`, `s2_api_key` (also `S2_API_KEY`), `openalex_api_key` (also `OPENALEX_API_KEY`).
 
-Set `mailto`. It is nominally optional, but OpenAlex's anonymous pool is a daily credit budget rather than a rate limit — exhaust it and every request comes back `429` with a `Retry-After` measured in hours, for the rest of the day. `s2_api_key` does the same for Semantic Scholar, which throttles unauthenticated callers hard enough that a single bibliography can trip it.
+Set `mailto`. It is nominally optional, but OpenAlex's anonymous pool is a daily credit budget rather than a rate limit — exhaust it and every request comes back `429` with a `Retry-After` measured in hours, for the rest of the day. `s2_api_key` does the same for Semantic Scholar, which throttles unauthenticated callers hard enough that a single bibliography can trip it. `openalex_api_key`, if you have one, supersedes the mailto pool entirely.
 
 Retries are automatic for `429`, `500`, `502` and `503`: three attempts, honouring `Retry-After` when the server sends one and backing off exponentially when it does not. A `Retry-After` longer than 30s is not slept through — it means a quota, not congestion, so the request fails immediately with `SourceError("rate limited, retry after Ns")` instead of stalling the caller and spending more of the budget. `check_reference` records that as a failed `SourceAttempt`, so a throttled source degrades the result rather than aborting the run.
 

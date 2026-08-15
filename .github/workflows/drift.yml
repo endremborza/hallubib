@@ -1,0 +1,27 @@
+name: Source Drift Canary
+
+# The offline suite cannot see a source changing its schema or its coverage.
+# This job can, so it runs on a schedule rather than on pull requests: an
+# upstream outage should open an issue, never block a merge.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: astral-sh/setup-uv@v7
+      with:
+        python-version: '3.12'
+        enable-cache: true
+    - run: uv sync
+    - name: Query the live sources
+      env:
+        HALLUBIB_MAILTO: ${{ secrets.HALLUBIB_MAILTO }}
+        S2_API_KEY: ${{ secrets.S2_API_KEY }}
+        OPENALEX_API_KEY: ${{ secrets.OPENALEX_API_KEY }}
+      run: uv run pytest tests/test_network.py -m network --run-network -v
