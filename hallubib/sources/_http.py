@@ -63,13 +63,18 @@ def _pace(host: str) -> None:
         time.sleep(wait)
 
 
-def _retry_delay(r: requests.Response, attempt: int) -> float:
+def _retry_delay(r: requests.Response, attempt: int) -> float | None:
+    """How long to wait before retrying, or None when the server has asked for
+    longer than we are willing to hold the caller for. An exhausted daily quota
+    comes back as a Retry-After measured in hours; sleeping through it is not an
+    option and retrying only spends more of it."""
     ra = r.headers.get("Retry-After")
     if ra:
         try:
-            return min(float(ra), _MAX_RETRY_AFTER)
+            wait = float(ra)
         except ValueError:
-            pass
+            return float(2**attempt)
+        return wait if wait <= _MAX_RETRY_AFTER else None
     return float(2**attempt)
 
 
@@ -106,8 +111,14 @@ def request(
             continue
         if r.status_code in _RETRY_STATUSES:
             detail = f"HTTP {r.status_code}"
+            delay = _retry_delay(r, attempt)
+            if delay is None:
+                raise SourceError(
+                    source,
+                    f"rate limited, retry after {r.headers['Retry-After']}s",
+                )
             if attempt < _MAX_TRIES - 1:
-                time.sleep(_retry_delay(r, attempt))
+                time.sleep(delay)
             continue
         return r
     raise SourceError(source, detail)

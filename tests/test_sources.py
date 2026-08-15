@@ -57,6 +57,36 @@ class TestRetry:
         assert "429" in str(exc.value)
         assert s.calls == 3
 
+    def test_retry_after_beyond_tolerance_gives_up_at_once(self, monkeypatch, sleeps):
+        """A quota that resets in ten hours is not something to sleep through:
+        retrying just burns more of it and delays the caller for nothing."""
+        s = FakeSession([FakeResponse(429, {"Retry-After": "38860"})])
+        _use(monkeypatch, s)
+        with pytest.raises(SourceError):
+            request("test", "https://example.org/x")
+        assert s.calls == 1
+        assert sleeps == []
+
+    def test_long_retry_after_is_reported(self, monkeypatch, sleeps):
+        s = FakeSession([FakeResponse(429, {"Retry-After": "38860"})])
+        _use(monkeypatch, s)
+        with pytest.raises(SourceError) as exc:
+            request("test", "https://example.org/x")
+        assert "38860" in exc.value.detail
+        assert "rate limited" in exc.value.detail
+
+    def test_short_retry_after_is_still_waited_out(self, monkeypatch, sleeps):
+        s = FakeSession([FakeResponse(429, {"Retry-After": "2"}), FakeResponse(200)])
+        _use(monkeypatch, s)
+        assert request("test", "https://example.org/x").status_code == 200
+        assert sleeps == [2.0]
+
+    def test_server_errors_still_retry_without_a_header(self, monkeypatch, sleeps):
+        s = FakeSession([FakeResponse(503), FakeResponse(200)])
+        _use(monkeypatch, s)
+        assert request("test", "https://example.org/x").status_code == 200
+        assert s.calls == 2
+
     def test_connection_error_raises_source_error(self, monkeypatch, sleeps):
         s = FakeSession([requests.ConnectionError("boom")] * 3)
         _use(monkeypatch, s)
