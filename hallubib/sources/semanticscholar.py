@@ -2,7 +2,6 @@
 
 from .. import cache
 from ..config import get_config
-from ..matching import author_last
 from ..names import parse_name
 from ..types import Name, OnlineRecord
 from ._http import SourceError, request
@@ -87,13 +86,15 @@ def _run_search(endpoint: str, cache_tag: str, params: dict) -> list[OnlineRecor
 
 
 def search_match(title: str, first_author: Name | None = None) -> list[OnlineRecord]:
+    """Closest-title match.
+
+    S2's match endpoint takes a title and nothing else, so `first_author` — kept
+    for a signature uniform with the other sources — is deliberately absent from
+    both the query and the cache key. Including it in the key only split the
+    cache by a value that never reached the API.
+    """
     query = title[:300]
-    author_q = author_last(first_author) if first_author else ""
-    return _run_search(
-        "paper/search/match",
-        f"semscholar:{query}:{author_q}",
-        {"query": query},
-    )
+    return _run_search("paper/search/match", f"semscholar:{query}", {"query": query})
 
 
 def search_relevance(query: str, limit: int = 10) -> list[OnlineRecord]:
