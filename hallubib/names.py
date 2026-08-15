@@ -22,6 +22,15 @@ LATEX_ACCENT_MAP: dict[str, str] = {
     "k": "\u0328",
 }
 
+# A control word is a maximal run of letters, so the letter accents only bind
+# through braces or a separator: `\u{g}` and `\u g` are the breve, `\url` is not.
+# The symbol accents are control symbols and may bind directly: `S\"onmez`.
+_SYMBOL_ACCENTS = r"`'^\"~=."
+_LETTER_ACCENTS = "cuvkrHd"
+_ACCENT_BRACED_RE = re.compile(rf"\\([{_SYMBOL_ACCENTS}{_LETTER_ACCENTS}])\{{(\w)\}}")
+_ACCENT_SYMBOL_RE = re.compile(rf"\\([{_SYMBOL_ACCENTS}])\s?(\w)")
+_ACCENT_LETTER_RE = re.compile(rf"\\([{_LETTER_ACCENTS}])\s+(\w)")
+
 _PARTICLES = frozenset(
     "van von der den de la le del della di da do dos das du ter ten zu zur vom".split()
 )
@@ -33,15 +42,12 @@ def latex_to_unicode(s: str) -> str:
     s = re.sub(r"\{\\(\w)\}", r"\1", s)
 
     def _replace_accent(m: re.Match[str]) -> str:
-        cmd = m.group(1)
-        char = m.group(2) or m.group(3) or ""
-        if cmd in LATEX_ACCENT_MAP and char:
-            combined = char + LATEX_ACCENT_MAP[cmd]
-            return unicodedata.normalize("NFC", combined)
-        return char
+        combined = m.group(2) + LATEX_ACCENT_MAP[m.group(1)]
+        return unicodedata.normalize("NFC", combined)
 
-    s = re.sub(r"\\([`'^\"~=.cuvkrHd])\{(\w)\}", _replace_accent, s)
-    s = re.sub(r"\\([`'^\"~=.cuvkrHd])\s?(\w)", _replace_accent, s)
+    s = re.sub(_ACCENT_BRACED_RE, _replace_accent, s)
+    s = re.sub(_ACCENT_SYMBOL_RE, _replace_accent, s)
+    s = re.sub(_ACCENT_LETTER_RE, _replace_accent, s)
     s = re.sub(r"[{}]", "", s)
     s = re.sub(r"\\&", "&", s)
     s = re.sub(r"~", " ", s)
