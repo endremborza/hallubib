@@ -1,433 +1,57 @@
-"""Verify references against OpenAlex, Semantic Scholar, arXiv, Crossref,
-and DOI resolution."""
+"""Match references against online records and categorize the results."""
 
 import re
-import unicodedata
-import xml.etree.ElementTree as ET
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from difflib import SequenceMatcher
 
-import requests
-
-from . import cache
-from .abbrevs import expand as expand_journal
+from .config import get_config
+from .matching import (
+    author_overlap,
+    first_author_match,
+    journal_similarity,
+    title_similarity,
+)
+from .sources import (
+    SourceError,
+    search_arxiv,
+    search_crossref,
+    search_openalex_doi,
+    search_openalex_title,
+    search_semscholar,
+    validate_doi,
+)
+from .sources._http import session
 from .special import (
     detect_source_type,
     ignorable_supplements_for,
     is_url_only_reference,
     validate_url,
 )
-from .types import CheckResult, DiffKind, FieldDiff, OnlineRecord, Reference, Status
-
-_SESSION: requests.Session | None = None
-_OPENALEX_BASE = "https://api.openalex.org"
-_ARXIV_BASE = "http://export.arxiv.org/api/query"
-_CROSSREF_BASE = "https://api.crossref.org"
-_SEMSCHOLAR_BASE = "https://api.semanticscholar.org/graph/v1"
-
-
-def _session() -> requests.Session:
-    global _SESSION
-    if _SESSION is None:
-        _SESSION = requests.Session()
-        _SESSION.headers["User-Agent"] = (
-            "hallubib/0.1 (bibliography checker; mailto:hallubib@example.com)"
-        )
-    return _SESSION
+from .types import (
+    CheckResult,
+    DiffKind,
+    FieldDiff,
+    MatchEvidence,
+    OnlineRecord,
+    Reference,
+    SourceAttempt,
+    Status,
+)
 
 
-def _strip_accents(s: str) -> str:
-    return "".join(
-        c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn"
+def _evidence(ref: Reference, c: OnlineRecord) -> tuple[float, MatchEvidence]:
+    tsim = title_similarity(ref.title, c.title)
+    asim = author_overlap(ref.authors, c.authors)
+    year_ok = not ref.year or not c.year or abs(ref.year - c.year) <= 1
+    score = tsim * 0.5 + asim * 0.3 + (0.2 if year_ok else 0.0)
+    ev = MatchEvidence(
+        title_sim=tsim,
+        author_overlap=asim,
+        first_author_match=first_author_match(ref.authors, c.authors),
+        year_ok=year_ok,
+        journal_sim=journal_similarity(ref.journal, c.journal),
     )
-
-
-def _norm(s: str) -> str:
-    s = _strip_accents(s.lower())
-    s = re.sub(r"[^a-z0-9\s]", "", s)
-    return re.sub(r"\s+", " ", s).strip()
-
-
-def _title_sim(a: str, b: str) -> float:
-    return SequenceMatcher(None, _norm(a), _norm(b)).ratio()
-
-
-def _author_last(name: str) -> str:
-    if "," in name:
-        return _norm(name.split(",")[0])
-    parts = name.split()
-    return _norm(parts[-1]) if parts else ""
-
-
-def _first_author_match(ref_authors: list[str], online_authors: list[str]) -> bool:
-    if not ref_authors or not online_authors:
-        return not ref_authors and not online_authors
-    return _author_last(ref_authors[0]) == _author_last(online_authors[0])
-
-
-def _author_overlap(ref_authors: list[str], online_authors: list[str]) -> float:
-    if not ref_authors or not online_authors:
-        return 1.0 if not ref_authors and not online_authors else 0.0
-    ref_lasts = {_author_last(a) for a in ref_authors}
-    online_lasts = {_author_last(a) for a in online_authors}
-    if not ref_lasts or not online_lasts:
-        return 0.0
-    intersection = ref_lasts & online_lasts
-    return len(intersection) / min(len(ref_lasts), len(online_lasts))
-
-
-# --- DOI ---
-
-
-def validate_doi(doi: str) -> bool:
-    ck = cache.cache_key(f"doi:{doi}")
-    cached = cache.get("doi", ck)
-    if cached is not None:
-        return cached.get("valid", False)
-    try:
-        r = _session().head(f"https://doi.org/{doi}", allow_redirects=True, timeout=10)
-        valid = r.status_code < 400
-    except requests.RequestException:
-        valid = False
-    cache.put("doi", ck, {"valid": valid})
-    return valid
-
-
-# --- OpenAlex ---
-
-
-def _parse_openalex_work(w: dict) -> OnlineRecord | None:
-    title = w.get("title") or w.get("display_name")
-    if not title:
-        return None
-    title = re.sub(r"<[^>]+>", "", title)
-    authors = []
-    for auth in w.get("authorships", []):
-        name = auth.get("author", {}).get("display_name")
-        if name:
-            parts = name.split()
-            if len(parts) >= 2:
-                authors.append(f"{parts[-1]}, {' '.join(parts[:-1])}")
-            else:
-                authors.append(name)
-    doi_raw = w.get("doi") or ""
-    doi = re.sub(r"^https?://doi\.org/", "", doi_raw) if doi_raw else None
-    loc = w.get("primary_location") or {}
-    source = loc.get("source") or {}
-    journal = source.get("display_name")
-    bib = w.get("biblio") or {}
-    return OnlineRecord(
-        source="openalex",
-        title=title,
-        authors=authors,
-        year=w.get("publication_year"),
-        journal=journal,
-        volume=bib.get("volume"),
-        number=bib.get("issue"),
-        pages=f"{bib['first_page']}-{bib['last_page']}"
-        if bib.get("first_page") and bib.get("last_page")
-        else None,
-        doi=doi,
-    )
-
-
-def search_openalex_doi(doi: str) -> OnlineRecord | None:
-    ck = cache.cache_key(f"openalex:doi:{doi}")
-    cached = cache.get("openalex", ck)
-    if cached is not None:
-        return _parse_openalex_work(cached) if cached.get("title") else None
-    try:
-        r = _session().get(
-            f"{_OPENALEX_BASE}/works/doi:{doi}",
-            params={
-                "select": "title,display_name,authorships,doi,"
-                "publication_year,primary_location,biblio",
-            },
-            timeout=15,
-        )
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        cache.put("openalex", ck, data)
-        return _parse_openalex_work(data)
-    except requests.RequestException:
-        return None
-
-
-def search_openalex_title(
-    title: str,
-    year: int | None = None,
-    *,
-    with_year_filter: bool = True,
-) -> list[OnlineRecord]:
-    query = re.sub(r"[^\w\s]", "", title)[:200]
-    yr_key = year if with_year_filter else "any"
-    ck = cache.cache_key(f"openalex:title:{query}:{yr_key}")
-    cached = cache.get("openalex", ck)
-    if cached is not None:
-        works = cached.get("results", [])
-    else:
-        try:
-            params: dict[str, str | int] = {
-                "search": query,
-                "per_page": 5,
-                "select": "title,display_name,authorships,doi,"
-                "publication_year,primary_location,biblio",
-            }
-            if year and with_year_filter:
-                params["filter"] = f"publication_year:{year - 1}-{year + 1}"
-            r = _session().get(f"{_OPENALEX_BASE}/works", params=params, timeout=15)
-            if r.status_code != 200:
-                return []
-            data = r.json()
-            works = data.get("results", [])
-            cache.put("openalex", ck, data)
-        except requests.RequestException:
-            return []
-    records = []
-    for w in works:
-        rec = _parse_openalex_work(w)
-        if rec:
-            records.append(rec)
-    return records
-
-
-# --- arXiv ---
-
-_ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom"}
-
-
-def search_arxiv(title: str, first_author: str | None = None) -> list[OnlineRecord]:
-    query_parts = [f'ti:"{title[:100]}"']
-    if first_author:
-        last = _author_last(first_author)
-        if last:
-            query_parts.append(f"au:{last}")
-    query = "+AND+".join(query_parts)
-    ck = cache.cache_key(f"arxiv:{query}")
-    cached = cache.get("arxiv", ck)
-    if cached is not None:
-        entries_raw = cached.get("entries", [])
-    else:
-        try:
-            r = _session().get(
-                _ARXIV_BASE,
-                params={"search_query": " AND ".join(query_parts), "max_results": "3"},
-                timeout=15,
-            )
-            if r.status_code != 200:
-                return []
-            root = ET.fromstring(r.text)
-            entries_raw = []
-            for entry in root.findall("atom:entry", _ARXIV_NS):
-                t = entry.findtext("atom:title", "", _ARXIV_NS).strip()
-                t = re.sub(r"\s+", " ", t)
-                authors = [
-                    a.findtext("atom:name", "", _ARXIV_NS)
-                    for a in entry.findall("atom:author", _ARXIV_NS)
-                ]
-                year_text = entry.findtext("atom:published", "", _ARXIV_NS)
-                year = int(year_text[:4]) if year_text and len(year_text) >= 4 else None
-                doi_el = entry.find("atom:link[@title='doi']", _ARXIV_NS)
-                doi = None
-                if doi_el is not None:
-                    href = doi_el.get("href", "")
-                    doi = re.sub(r"^https?://doi\.org/", "", href) if href else None
-                entries_raw.append(
-                    {
-                        "title": t,
-                        "authors": authors,
-                        "year": year,
-                        "doi": doi,
-                    }
-                )
-            cache.put("arxiv", ck, {"entries": entries_raw})
-        except (requests.RequestException, ET.ParseError):
-            return []
-
-    records = []
-    for e in entries_raw:
-        auth_list = []
-        for a in e.get("authors", []):
-            parts = a.split()
-            if len(parts) >= 2:
-                auth_list.append(f"{parts[-1]}, {' '.join(parts[:-1])}")
-            else:
-                auth_list.append(a)
-        records.append(
-            OnlineRecord(
-                source="arxiv",
-                title=e["title"],
-                authors=auth_list,
-                year=e.get("year"),
-                doi=e.get("doi"),
-            )
-        )
-    return records
-
-
-# --- Crossref ---
-
-
-def _parse_crossref_item(item: dict) -> OnlineRecord | None:
-    titles = item.get("title", [])
-    if not titles:
-        return None
-    title = titles[0]
-    authors = []
-    for a in item.get("author", []):
-        family = a.get("family", "")
-        given = a.get("given", "")
-        if family:
-            authors.append(f"{family}, {given}" if given else family)
-    year = None
-    for date_field in ("published-print", "published-online", "issued"):
-        date_info = item.get(date_field)
-        if date_info:
-            parts = date_info.get("date-parts", [[]])
-            if parts and parts[0] and parts[0][0]:
-                year = parts[0][0]
-                break
-    containers = item.get("container-title", [])
-    journal = containers[0] if containers else None
-    doi = item.get("DOI")
-    return OnlineRecord(
-        source="crossref",
-        title=title,
-        authors=authors,
-        year=year,
-        journal=journal,
-        volume=item.get("volume"),
-        number=item.get("issue"),
-        pages=item.get("page"),
-        doi=doi,
-    )
-
-
-def search_crossref(title: str, first_author: str | None = None) -> list[OnlineRecord]:
-    query = re.sub(r"[^\w\s]", "", title)[:200]
-    author_q = _author_last(first_author) if first_author else ""
-    ck = cache.cache_key(f"crossref:{query}:{author_q}")
-    cached = cache.get("crossref", ck)
-    if cached is not None:
-        items = cached.get("items", [])
-    else:
-        try:
-            params: dict[str, str | int] = {
-                "query.title": query,
-                "rows": 5,
-                "select": "title,author,issued,published-print,"
-                "published-online,container-title,"
-                "volume,issue,page,DOI",
-            }
-            if author_q:
-                params["query.author"] = author_q
-            r = _session().get(
-                f"{_CROSSREF_BASE}/works",
-                params=params,
-                timeout=15,
-            )
-            if r.status_code != 200:
-                return []
-            data = r.json()
-            items = data.get("message", {}).get("items", [])
-            cache.put("crossref", ck, {"items": items})
-        except requests.RequestException:
-            return []
-    records = []
-    for item in items:
-        rec = _parse_crossref_item(item)
-        if rec:
-            records.append(rec)
-    return records
-
-
-# --- Semantic Scholar ---
-
-_SEMSCHOLAR_FIELDS = "title,authors,year,journal,externalIds"
-
-
-def _parse_semscholar_paper(paper: dict) -> OnlineRecord | None:
-    title = paper.get("title")
-    if not title:
-        return None
-    authors = []
-    for a in paper.get("authors") or []:
-        name = a.get("name", "")
-        if not name:
-            continue
-        parts = name.split()
-        if len(parts) >= 2:
-            authors.append(f"{parts[-1]}, {' '.join(parts[:-1])}")
-        else:
-            authors.append(name)
-    ext_ids = paper.get("externalIds") or {}
-    doi = ext_ids.get("DOI")
-    journal_info = paper.get("journal") or {}
-    journal = journal_info.get("name")
-    volume = journal_info.get("volume")
-    pages = journal_info.get("pages")
-    return OnlineRecord(
-        source="semanticscholar",
-        title=title,
-        authors=authors,
-        year=paper.get("year"),
-        journal=journal,
-        volume=volume,
-        pages=pages,
-        doi=doi,
-    )
-
-
-def search_semscholar(
-    title: str,
-    first_author: str | None = None,
-) -> list[OnlineRecord]:
-    query = title[:300]
-    author_q = _author_last(first_author) if first_author else ""
-    ck = cache.cache_key(f"semscholar:{query}:{author_q}")
-    cached = cache.get("semscholar", ck)
-    if cached is not None:
-        papers = cached.get("data", [])
-    else:
-        try:
-            r = _session().get(
-                f"{_SEMSCHOLAR_BASE}/paper/search/match",
-                params={"query": query, "fields": _SEMSCHOLAR_FIELDS},
-                timeout=15,
-            )
-            if r.status_code != 200:
-                return []
-            data = r.json()
-            papers = data.get("data", [])
-            cache.put("semscholar", ck, {"data": papers})
-        except requests.RequestException:
-            return []
-    records = []
-    for p in papers:
-        rec = _parse_semscholar_paper(p)
-        if rec:
-            records.append(rec)
-    return records
-
-
-# --- Journal matching ---
-
-
-def _norm_journal(j: str | None) -> str:
-    if not j:
-        return ""
-    return expand_journal(j)
-
-
-def _journal_sim(a: str | None, b: str | None) -> float:
-    na, nb = _norm_journal(a), _norm_journal(b)
-    if not na or not nb:
-        return 1.0
-    return SequenceMatcher(None, na, nb).ratio()
-
-
-# --- Diff computation ---
+    return score, ev
 
 
 def _compute_diffs(ref: Reference, rec: OnlineRecord) -> list[FieldDiff]:
@@ -443,10 +67,12 @@ def _compute_diffs(ref: Reference, rec: OnlineRecord) -> list[FieldDiff]:
             continue
         if lstr is not None and ostr is None:
             continue
-        if field_name == "title" and lstr and ostr and _title_sim(lstr, ostr) > 0.95:
-            continue
-        if field_name == "journal" and lstr and ostr and _journal_sim(lstr, ostr) > 0.9:
-            continue
+        if field_name == "title" and lstr and ostr:
+            if title_similarity(lstr, ostr) > 0.95:
+                continue
+        if field_name == "journal" and lstr and ostr:
+            if journal_similarity(lstr, ostr) > 0.9:
+                continue
         if field_name == "pages" and lstr and ostr:
             norm_l = re.sub(r"[-–—]+", "-", lstr).replace(" ", "")
             norm_o = re.sub(r"[-–—]+", "-", ostr).replace(" ", "")
@@ -457,9 +83,6 @@ def _compute_diffs(ref: Reference, rec: OnlineRecord) -> list[FieldDiff]:
     return diffs
 
 
-# --- Categorization ---
-
-
 def categorize(ref: Reference, candidates: list[OnlineRecord]) -> CheckResult:
     if not candidates:
         return CheckResult(
@@ -468,29 +91,12 @@ def categorize(ref: Reference, candidates: list[OnlineRecord]) -> CheckResult:
             notes=["No matching records found online"],
         )
 
-    best: OnlineRecord | None = None
-    best_score = 0.0
-    for c in candidates:
-        tsim = _title_sim(ref.title, c.title)
-        asim = _author_overlap(ref.authors, c.authors)
-        year_close = not ref.year or not c.year or abs(ref.year - c.year) <= 1
-        ysim = 1.0 if year_close else 0.0
-        score = tsim * 0.5 + asim * 0.3 + ysim * 0.2
-        if score > best_score:
-            best_score = score
-            best = c
-
-    if best is None:
-        return CheckResult(
-            reference=ref,
-            status=Status.UNKNOWN,
-            notes=["No matching records found online"],
-        )
-
-    tsim = _title_sim(ref.title, best.title)
-    fa_match = _first_author_match(ref.authors, best.authors)
-    jsim = _journal_sim(ref.journal, best.journal)
-    year_ok = not ref.year or not best.year or abs(ref.year - best.year) <= 1
+    scored = sorted(
+        ((_evidence(ref, c), c) for c in candidates),
+        key=lambda pair: (-pair[0][0], pair[1].title, pair[1].source),
+    )
+    (score, ev), best = scored[0]
+    alternatives = [c for _, c in scored[1:]]
 
     diffs = _compute_diffs(ref, best)
     suggestions = {d.field_name: d.online_value for d in diffs if d.online_value}
@@ -507,7 +113,20 @@ def categorize(ref: Reference, candidates: list[OnlineRecord]) -> CheckResult:
                 except ValueError:
                     pass
 
-    if tsim >= 0.90 and fa_match and year_ok and (jsim >= 0.8 or not ref.journal):
+    common = {
+        "reference": ref,
+        "best_match": best,
+        "score": score,
+        "evidence": ev,
+        "alternatives": alternatives,
+    }
+
+    if (
+        ev.title_sim >= 0.90
+        and ev.first_author_match
+        and ev.year_ok
+        and (ev.journal_sim >= 0.8 or not ref.journal)
+    ):
         ignorable = ignorable_supplements_for(ref)
         corrections = [d for d in diffs if d.kind == DiffKind.CORRECTION]
         significant_supplements = [
@@ -515,97 +134,137 @@ def categorize(ref: Reference, candidates: list[OnlineRecord]) -> CheckResult:
             for d in diffs
             if d.kind == DiffKind.SUPPLEMENT and d.field_name not in ignorable
         ]
-        if not corrections and not significant_supplements:
-            return CheckResult(
-                reference=ref,
-                status=Status.VERIFIED,
-                best_match=best,
-                diffs=diffs,
-                suggestions=suggestions,
-                notes=notes,
-            )
+        status = (
+            Status.VERIFIED
+            if not corrections and not significant_supplements
+            else Status.AUTO_CORRECTABLE
+        )
         return CheckResult(
-            reference=ref,
-            status=Status.AUTO_CORRECTABLE,
-            best_match=best,
+            status=status,
             diffs=diffs,
             suggestions=suggestions,
             notes=notes,
+            **common,
         )
 
-    if tsim >= 0.70 or (fa_match and tsim >= 0.50):
-        if tsim < 0.90:
-            notes.append(f"Title similarity: {tsim:.0%}")
-        if not fa_match:
+    if ev.title_sim >= 0.70 or (ev.first_author_match and ev.title_sim >= 0.50):
+        if ev.title_sim < 0.90:
+            notes.append(f"Title similarity: {ev.title_sim:.0%}")
+        if not ev.first_author_match:
             notes.append("First author mismatch")
-        if not year_ok:
+        if not ev.year_ok:
             notes.append(f"Year mismatch: local={ref.year}, online={best.year}")
         return CheckResult(
-            reference=ref,
             status=Status.NEEDS_ATTENTION,
-            best_match=best,
             diffs=diffs,
             suggestions=suggestions,
             notes=notes,
+            **common,
         )
 
     return CheckResult(
-        reference=ref,
         status=Status.UNKNOWN,
-        best_match=best,
-        notes=[f"Best candidate title similarity: {tsim:.0%}"],
+        notes=[f"Best candidate title similarity: {ev.title_sim:.0%}"],
+        **common,
     )
 
 
-# --- Orchestration ---
+def _finalize(result: CheckResult, attempts: list[SourceAttempt]) -> CheckResult:
+    result.attempts = attempts
+    for a in attempts:
+        if not a.ok:
+            result.notes.append(f"{a.source} lookup failed: {a.error}")
+    return result
 
 
-def _check_one(ref: Reference) -> CheckResult:
+def check_reference(ref: Reference) -> CheckResult:
     if is_url_only_reference(ref):
         return _check_url_reference(ref)
 
+    attempts: list[SourceAttempt] = []
     candidates: list[OnlineRecord] = []
 
+    def run(source: str, query: str, fn) -> list[OnlineRecord]:
+        try:
+            res = fn()
+        except SourceError as e:
+            attempts.append(SourceAttempt(source, query, ok=False, error=e.detail))
+            return []
+        recs = res if isinstance(res, list) else ([res] if res else [])
+        attempts.append(SourceAttempt(source, query, ok=True, hits=len(recs)))
+        return recs
+
+    doi_invalid = False
     if ref.doi:
-        if validate_doi(ref.doi):
-            rec = search_openalex_doi(ref.doi)
-            if rec:
-                candidates.append(rec)
+        doi = ref.doi
+        try:
+            doi_valid = validate_doi(doi)
+            doi_invalid = not doi_valid
+            attempts.append(SourceAttempt("doi", doi, ok=True, hits=int(doi_valid)))
+        except SourceError as e:
+            doi_valid = False
+            attempts.append(SourceAttempt("doi", doi, ok=False, error=e.detail))
+        if doi_valid:
+            candidates += run(
+                "openalex",
+                f"doi:{doi}",
+                lambda: search_openalex_doi(doi),
+            )
+            if candidates:
                 result = categorize(ref, candidates)
-                if result.status == Status.VERIFIED:
-                    return result
+                if result.status is Status.VERIFIED:
+                    return _finalize(result, attempts)
 
-    if not candidates:
-        candidates.extend(search_openalex_title(ref.title, ref.year))
+    candidates += run(
+        "openalex",
+        f"title:{ref.title}",
+        lambda: search_openalex_title(ref.title, ref.year),
+    )
 
-    is_arxiv = ref.url and "arxiv" in ref.url.lower()
+    first_author = ref.authors[0] if ref.authors else None
+    is_arxiv = bool(ref.url and "arxiv" in ref.url.lower())
     if is_arxiv or not candidates:
-        first_author = ref.authors[0] if ref.authors else None
-        candidates.extend(search_arxiv(ref.title, first_author))
+        candidates += run(
+            "arxiv",
+            f"title:{ref.title}",
+            lambda: search_arxiv(ref.title, first_author),
+        )
 
     result = categorize(ref, candidates)
     if result.status not in (Status.VERIFIED, Status.AUTO_CORRECTABLE):
-        first_author = ref.authors[0] if ref.authors else None
-        crossref_results = search_crossref(ref.title, first_author)
-        semscholar_results = search_semscholar(ref.title, first_author)
-        if crossref_results or semscholar_results:
-            candidates.extend(crossref_results)
-            candidates.extend(semscholar_results)
+        extra = run(
+            "crossref",
+            f"title:{ref.title}",
+            lambda: search_crossref(ref.title, first_author),
+        )
+        extra += run(
+            "semanticscholar",
+            f"title:{ref.title}",
+            lambda: search_semscholar(ref.title, first_author),
+        )
+        if extra:
+            candidates += extra
             result = categorize(ref, candidates)
 
-    if result.status == Status.UNKNOWN and ref.year:
-        wider = search_openalex_title(ref.title, ref.year, with_year_filter=False)
+    if result.status is Status.UNKNOWN and ref.year:
+        wider = run(
+            "openalex",
+            f"title-any-year:{ref.title}",
+            lambda: search_openalex_title(ref.title, ref.year, with_year_filter=False),
+        )
         if wider:
-            candidates.extend(wider)
+            candidates += wider
             result = categorize(ref, candidates)
 
-    return result
+    if doi_invalid:
+        result.notes.append(f"DOI does not resolve: {ref.doi}")
+    return _finalize(result, attempts)
 
 
 def _check_url_reference(ref: Reference) -> CheckResult:
     url = ref.url or ""
     source_type = detect_source_type(url)
-    reachable = validate_url(url, _session()) if url else False
+    reachable = validate_url(url, session()) if url else False
     notes: list[str] = []
     if source_type == "github":
         notes.append(f"GitHub repository: {url}")
@@ -613,35 +272,42 @@ def _check_url_reference(ref: Reference) -> CheckResult:
         notes.append(f"arXiv: {url}")
     else:
         notes.append(f"URL: {url}")
-
-    if reachable:
-        notes.append("URL is reachable")
-        return CheckResult(
-            reference=ref,
-            status=Status.URL_REFERENCE,
-            notes=notes,
-        )
-    else:
-        notes.append("URL is not reachable")
-        return CheckResult(
-            reference=ref,
-            status=Status.UNKNOWN,
-            notes=notes,
-        )
+    notes.append("URL is reachable" if reachable else "URL is not reachable")
+    return CheckResult(
+        reference=ref,
+        status=Status.URL_REFERENCE if reachable else Status.UNKNOWN,
+        attempts=[SourceAttempt("url", url, ok=True, hits=int(reachable))],
+        notes=notes,
+    )
 
 
-def check_references(refs: list[Reference], max_workers: int = 6) -> list[CheckResult]:
-    results: list[CheckResult] = [None] * len(refs)  # type: ignore[list-item]
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_check_one, ref): i for i, ref in enumerate(refs)}
+def check_references_iter(
+    refs: Sequence[Reference],
+    max_workers: int | None = None,
+) -> Iterator[tuple[int, CheckResult]]:
+    workers = max_workers or get_config().max_workers
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(check_reference, ref): i for i, ref in enumerate(refs)}
         for fut in as_completed(futures):
             idx = futures[fut]
             try:
-                results[idx] = fut.result()
+                yield idx, fut.result()
             except Exception as e:
-                results[idx] = CheckResult(
-                    reference=refs[idx],
-                    status=Status.UNKNOWN,
-                    notes=[f"Error during verification: {e}"],
+                yield (
+                    idx,
+                    CheckResult(
+                        reference=refs[idx],
+                        status=Status.UNKNOWN,
+                        notes=[f"Error during verification: {e}"],
+                    ),
                 )
-    return results
+
+
+def check_references(
+    refs: Sequence[Reference],
+    max_workers: int | None = None,
+) -> list[CheckResult]:
+    results: list[CheckResult | None] = [None] * len(refs)
+    for idx, result in check_references_iter(refs, max_workers):
+        results[idx] = result
+    return [r for r in results if r is not None]

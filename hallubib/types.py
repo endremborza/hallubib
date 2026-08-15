@@ -65,6 +65,10 @@ class CheckResult:
     reference: Reference
     status: Status
     best_match: OnlineRecord | None = None
+    score: float = 0.0
+    evidence: MatchEvidence | None = None
     diffs: list[FieldDiff] = field(default_factory=list)
     suggestions: dict[str, str] = field(default_factory=dict)
+    alternatives: list[OnlineRecord] = field(default_factory=list)
+    attempts: list[SourceAttempt] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)

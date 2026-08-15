@@ -1,49 +1,49 @@
-from hallubib.types import DiffKind, EntryKind, OnlineRecord, Reference, Status
-from hallubib.verify import (
-    _author_last,
-    _first_author_match,
-    _parse_semscholar_paper,
-    _title_sim,
-    categorize,
-)
+from hallubib.matching import author_last, first_author_match, title_similarity
+from hallubib.sources import SourceError
+from hallubib.types import DiffKind, Name, OnlineRecord, Reference, Status
+from hallubib.verify import categorize, check_reference
 
 
 class TestTitleSim:
     def test_identical(self):
-        assert _title_sim("College Admissions", "College Admissions") == 1.0
+        assert title_similarity("College Admissions", "College Admissions") == 1.0
 
     def test_case_insensitive(self):
-        assert _title_sim("College Admissions", "college admissions") == 1.0
+        assert title_similarity("College Admissions", "college admissions") == 1.0
 
     def test_partial(self):
-        sim = _title_sim(
+        sim = title_similarity(
             "College Admissions and the Stability of Marriage",
-            "College Admissions and Stability of Marriage"
+            "College Admissions and Stability of Marriage",
         )
         assert sim > 0.9
 
     def test_unrelated(self):
-        assert _title_sim("Quantum Computing", "Housing Prices") < 0.3
+        assert title_similarity("Quantum Computing", "Housing Prices") < 0.3
 
 
 class TestAuthorMatching:
     def test_last_name_extraction(self):
-        assert _author_last("Gale, David") == "gale"
-        assert _author_last("David Gale") == "gale"
+        assert author_last(Name(family="Gale", given="David")) == "gale"
+        assert author_last(Name(literal="Gale Institute")) == "institute"
 
     def test_first_author_match(self):
-        assert _first_author_match(["Gale, David"], ["Gale, D."])
-        assert not _first_author_match(["Gale, David"], ["Shapley, Lloyd"])
+        gale = [Name(family="Gale", given="David")]
+        assert first_author_match(gale, [Name(family="Gale", given="D.")])
+        assert not first_author_match(gale, [Name(family="Shapley", given="Lloyd")])
 
     def test_empty_lists(self):
-        assert _first_author_match([], [])
-        assert not _first_author_match(["Gale, David"], [])
+        assert first_author_match([], [])
+        assert not first_author_match([Name(family="Gale")], [])
 
 
 def _make_ref(**kwargs) -> Reference:
     defaults = {
-        "key": "test", "entry_kind": EntryKind.ARTICLE,
-        "title": "Test Title", "authors": ["Last, First"], "year": 2020,
+        "key": "test",
+        "title": "Test Title",
+        "authors": [Name(family="Last", given="First")],
+        "type": "article-journal",
+        "year": 2020,
     }
     defaults.update(kwargs)
     return Reference(**defaults)
@@ -51,8 +51,10 @@ def _make_ref(**kwargs) -> Reference:
 
 def _make_online(**kwargs) -> OnlineRecord:
     defaults = {
-        "source": "openalex", "title": "Test Title",
-        "authors": ["Last, First"], "year": 2020,
+        "source": "openalex",
+        "title": "Test Title",
+        "authors": [Name(family="Last", given="First")],
+        "year": 2020,
     }
     defaults.update(kwargs)
     return OnlineRecord(**defaults)
@@ -64,6 +66,9 @@ class TestCategorize:
         rec = _make_online(title="College Admissions and the Stability of Marriage")
         result = categorize(ref, [rec])
         assert result.status == Status.VERIFIED
+        assert result.evidence is not None
+        assert result.evidence.title_sim == 1.0
+        assert result.score > 0.9
 
     def test_auto_correctable_volume_diff(self):
         ref = _make_ref(
@@ -89,14 +94,23 @@ class TestCategorize:
         result = categorize(ref, [])
         assert result.status == Status.UNKNOWN
 
-    def test_picks_best_match(self):
-        ref = _make_ref(title="Pairwise kidney exchange", authors=["Roth, Alvin E"])
-        good = _make_online(title="Pairwise kidney exchange", authors=["Roth, Alvin E"])
-        bad = _make_online(title="Some other paper", authors=["Smith, John"])
+    def test_picks_best_match_keeps_alternatives(self):
+        ref = _make_ref(
+            title="Pairwise kidney exchange",
+            authors=[Name(family="Roth", given="Alvin E")],
+        )
+        good = _make_online(
+            title="Pairwise kidney exchange",
+            authors=[Name(family="Roth", given="Alvin E")],
+        )
+        bad = _make_online(
+            title="Some other paper", authors=[Name(family="Smith", given="John")]
+        )
         result = categorize(ref, [bad, good])
         assert result.status == Status.VERIFIED
         assert result.best_match is not None
         assert result.best_match.title == "Pairwise kidney exchange"
+        assert result.alternatives == [bad]
 
     def test_year_tolerance(self):
         ref = _make_ref(title="Test Paper", year=2020)
@@ -133,35 +147,43 @@ class TestCategorize:
         assert any("online-first" in n for n in result.notes)
 
 
-class TestSemScholarParser:
-    def test_parse_full(self):
-        paper = {
-            "title": "The Design of Mechanisms for Resource Allocation",
-            "authors": [{"name": "Leonid Hurwicz"}],
-            "year": 1973,
-            "journal": {"name": "American Economic Review", "volume": "63", "pages": "1-30"},
-            "externalIds": {"DOI": "10.1234/test"},
-        }
-        rec = _parse_semscholar_paper(paper)
-        assert rec is not None
-        assert rec.source == "semanticscholar"
-        assert rec.title == "The Design of Mechanisms for Resource Allocation"
-        assert rec.authors == ["Hurwicz, Leonid"]
-        assert rec.year == 1973
-        assert rec.journal == "American Economic Review"
-        assert rec.volume == "63"
-        assert rec.pages == "1-30"
-        assert rec.doi == "10.1234/test"
+class TestCheckReferenceAttempts:
+    def test_network_failure_recorded(self, monkeypatch):
+        def fail(*args, **kwargs):
+            raise SourceError("openalex", "connection refused")
 
-    def test_parse_no_title(self):
-        assert _parse_semscholar_paper({}) is None
-        assert _parse_semscholar_paper({"title": None}) is None
+        monkeypatch.setattr("hallubib.verify.search_openalex_title", fail)
+        monkeypatch.setattr("hallubib.verify.search_arxiv", fail)
+        monkeypatch.setattr("hallubib.verify.search_crossref", fail)
+        monkeypatch.setattr("hallubib.verify.search_semscholar", fail)
+        ref = _make_ref(doi=None)
+        result = check_reference(ref)
+        assert result.status == Status.UNKNOWN
+        assert result.attempts
+        assert all(not a.ok for a in result.attempts)
+        assert any("lookup failed" in n for n in result.notes)
 
-    def test_parse_minimal(self):
-        rec = _parse_semscholar_paper({"title": "Some Paper"})
-        assert rec is not None
-        assert rec.authors == []
-        assert rec.doi is None
-        assert rec.journal is None
+    def test_not_found_is_distinct_from_failure(self, monkeypatch):
+        monkeypatch.setattr("hallubib.verify.search_openalex_title", lambda *a, **k: [])
+        monkeypatch.setattr("hallubib.verify.search_arxiv", lambda *a, **k: [])
+        monkeypatch.setattr("hallubib.verify.search_crossref", lambda *a, **k: [])
+        monkeypatch.setattr("hallubib.verify.search_semscholar", lambda *a, **k: [])
+        ref = _make_ref(doi=None, year=None)
+        result = check_reference(ref)
+        assert result.status == Status.UNKNOWN
+        assert all(a.ok and a.hits == 0 for a in result.attempts)
+        assert not any("lookup failed" in n for n in result.notes)
 
-
+    def test_doi_fallthrough_reaches_title_search(self, monkeypatch):
+        online = _make_online(title="Completely Different Paper")
+        good = _make_online(title="Test Title")
+        monkeypatch.setattr("hallubib.verify.validate_doi", lambda d: True)
+        monkeypatch.setattr("hallubib.verify.search_openalex_doi", lambda d: online)
+        monkeypatch.setattr(
+            "hallubib.verify.search_openalex_title", lambda *a, **k: [good]
+        )
+        monkeypatch.setattr("hallubib.verify.search_arxiv", lambda *a, **k: [])
+        ref = _make_ref(doi="10.1/x")
+        result = check_reference(ref)
+        assert result.status == Status.VERIFIED
+        assert result.best_match is good
