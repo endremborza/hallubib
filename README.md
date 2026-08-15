@@ -128,6 +128,10 @@ CSL-JSON is the boundary format: `to_csl(ref_or_record, key=None)` and `from_csl
 
 `configure(...)` swaps a frozen `Config`: `mailto` (polite pools; also `HALLUBIB_MAILTO`), `cache_dir`, `cache_ttl_days`, `timeout`, `max_workers`, `s2_api_key` (also `S2_API_KEY`).
 
+Set `mailto`. It is nominally optional, but OpenAlex's anonymous pool is a daily credit budget rather than a rate limit — exhaust it and every request comes back `429` with a `Retry-After` measured in hours, for the rest of the day. `s2_api_key` does the same for Semantic Scholar, which throttles unauthenticated callers hard enough that a single bibliography can trip it.
+
+Retries are automatic for `429`, `500`, `502` and `503`: three attempts, honouring `Retry-After` when the server sends one and backing off exponentially when it does not. A `Retry-After` longer than 30s is not slept through — it means a quota, not congestion, so the request fails immediately with `SourceError("rate limited, retry after Ns")` instead of stalling the caller and spending more of the budget. `check_reference` records that as a failed `SourceAttempt`, so a throttled source degrades the result rather than aborting the run.
+
 ## Year discrepancies
 
 When the local year differs from the online record by exactly 1 year, the tool notes this as a potential online-first vs. print publication difference. This is common: a paper may be published online in December 2019 but appear in the January 2020 print issue.
@@ -184,9 +188,16 @@ Additional APIs that could improve coverage further:
 ## Running tests
 
 ```bash
-uv run pytest                          # offline tests
-uv run pytest -m network               # include network integration tests
+uv run pytest                            # offline, ~2s — what CI runs on every push
+uv run pytest --run-network              # everything, offline + the live drift canary
+uv run python -m tests.record_cassettes  # re-record the API fixtures (needs network)
 ```
+
+The offline suite is the whole pipeline: `tests/fixtures/golden.bib` holds one reference per route through `verify.check_reference` (valid DOI, unregistered DOI, arXiv preprint, book, chapter, wrong volume, wrong year, invented paper, three URL-only forms), and `tests/fixtures/cassettes/golden.json` holds the real API responses each of them provoked. Replay intercepts `sources._http.request`, so every source client still runs its own cache lookup, status handling, parsing and cache write against genuine payloads — no socket, no fixtures written by hand.
+
+`tests/test_network.py` is the drift canary and is skipped without `--run-network`. It exists for the one failure replay structurally cannot see: a source changing its schema, matching or coverage. It runs weekly in CI (`.github/workflows/drift.yml`) rather than on pull requests, so an upstream outage never blocks a merge, and it distinguishes drift from throttling — a reference whose lookups degraded is reported and skipped, not failed.
+
+Re-record whenever a source's schema moves. The recorder uses a cold cache, merges into the existing cassette, and never lets a throttled retry demote an interaction already on disk, so it is safe to run repeatedly until every call lands.
 
 ## License
 
