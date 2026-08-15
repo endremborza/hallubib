@@ -80,7 +80,9 @@ def search_doi(doi: str) -> OnlineRecord | None:
     ck = cache.cache_key(f"openalex:doi:{doi}:{_SELECT}")
     cached = cache.get("openalex", ck)
     if cached is not None:
-        return parse_work(cached) if cached.get("title") else None
+        # the same call the live path makes: a cache hit must not answer
+        # differently from a miss for a work that only carries a display_name
+        return parse_work(cached)
     r = request(
         "openalex",
         f"{_BASE}/works/doi:{doi}",
