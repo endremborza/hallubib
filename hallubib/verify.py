@@ -107,13 +107,8 @@ def categorize(ref: Reference, candidates: list[OnlineRecord]) -> CheckResult:
     for d in diffs:
         if d.field_name == "year" and d.kind == DiffKind.CORRECTION:
             if d.local_value and d.online_value:
-                try:
-                    if abs(int(d.local_value) - int(d.online_value)) == 1:
-                        notes.append(
-                            "Year difference may be due to online-first vs. print"
-                        )
-                except ValueError:
-                    pass
+                if abs(int(d.local_value) - int(d.online_value)) == 1:
+                    notes.append("Year difference may be due to online-first vs. print")
 
     common = {
         "reference": ref,
@@ -271,13 +266,9 @@ def _check_url_reference(ref: Reference) -> CheckResult:
     url = ref.url or ""
     source_type = detect_source_type(url)
     reachable = validate_url(url, session()) if url else False
-    notes: list[str] = []
-    if source_type == "github":
-        notes.append(f"GitHub repository: {url}")
-    elif source_type == "arxiv":
-        notes.append(f"arXiv: {url}")
-    else:
-        notes.append(f"URL: {url}")
+    # arXiv URLs never reach here: is_url_only_reference sends them down the
+    # bibliographic path so the preprint itself gets matched.
+    notes = [f"GitHub repository: {url}" if source_type == "github" else f"URL: {url}"]
     notes.append("URL is reachable" if reachable else "URL is not reachable")
     return CheckResult(
         reference=ref,
