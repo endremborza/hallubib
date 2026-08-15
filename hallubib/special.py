@@ -63,6 +63,6 @@ def validate_url(url: str, session: requests.Session) -> bool:
 def ignorable_supplements_for(ref: Reference) -> frozenset[str]:
     if ref.url and _ARXIV_RE.search(ref.url):
         return IGNORABLE_SUPPLEMENTS["arxiv"]
-    if ref.entry_kind.name == "BOOK":
+    if ref.type == "book":
         return IGNORABLE_SUPPLEMENTS["book"]
     return IGNORABLE_SUPPLEMENTS["default"]

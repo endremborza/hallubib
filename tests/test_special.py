@@ -3,13 +3,15 @@ from hallubib.special import (
     ignorable_supplements_for,
     is_url_only_reference,
 )
-from hallubib.types import EntryKind, Reference
+from hallubib.types import Reference
 
 
 def _make_ref(**kwargs) -> Reference:
     defaults = {
-        "key": "test", "entry_kind": EntryKind.ARTICLE,
-        "title": "Test", "authors": [],
+        "key": "test",
+        "title": "Test",
+        "authors": [],
+        "type": "article-journal",
     }
     defaults.update(kwargs)
     return Reference(**defaults)
@@ -53,19 +55,18 @@ class TestIsUrlOnly:
 
 class TestIgnorableSupplements:
     def test_default(self):
-        ref = _make_ref()
-        ignorable = ignorable_supplements_for(ref)
+        ignorable = ignorable_supplements_for(_make_ref())
         assert "doi" in ignorable
         assert "number" in ignorable
         assert "journal" not in ignorable
 
     def test_arxiv(self):
-        ref = _make_ref(url="https://arxiv.org/abs/1234")
-        ignorable = ignorable_supplements_for(ref)
+        ignorable = ignorable_supplements_for(
+            _make_ref(url="https://arxiv.org/abs/1234")
+        )
         assert "journal" in ignorable
 
     def test_book(self):
-        ref = _make_ref(entry_kind=EntryKind.BOOK)
-        ignorable = ignorable_supplements_for(ref)
+        ignorable = ignorable_supplements_for(_make_ref(type="book"))
         assert "journal" in ignorable
         assert "volume" in ignorable

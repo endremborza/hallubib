@@ -6,7 +6,13 @@ from collections import Counter
 from pathlib import Path
 
 from . import cache
-from .types import CheckResult, DiffKind, Status
+from .types import CheckResult, DiffKind, Name, Status
+
+
+def _first_author(authors: list[Name]) -> str:
+    if not authors:
+        return "?"
+    return authors[0].family or authors[0].literal or "?"
 
 
 def format_stdout(results: list[CheckResult], filename: str) -> str:
@@ -26,9 +32,8 @@ def format_stdout(results: list[CheckResult], filename: str) -> str:
 
 def _ref_label(r: CheckResult) -> str:
     ref = r.reference
-    author_str = ref.authors[0].split(",")[0] if ref.authors else "?"
     year_str = str(ref.year) if ref.year else "?"
-    return f"`{ref.key}` — {author_str} ({year_str}): {ref.title[:80]}"
+    return f"`{ref.key}` — {_first_author(ref.authors)} ({year_str}): {ref.title[:80]}"
 
 
 def _ref_details(r: CheckResult) -> list[str]:
@@ -171,9 +176,7 @@ def format_html(results: list[CheckResult], filename: str) -> str:
         parts.append(f"<h2>{status.value} ({len(group)})</h2>")
         for r in group:
             ref = r.reference
-            author_str = (
-                _html_escape(ref.authors[0].split(",")[0]) if ref.authors else "?"
-            )
+            author_str = _html_escape(_first_author(ref.authors))
             year_str = str(ref.year) if ref.year else "?"
             title_str = _html_escape(ref.title[:100])
             parts.append(f'<div class="ref-card {css}">')
@@ -219,12 +222,12 @@ def format_html(results: list[CheckResult], filename: str) -> str:
             for note in r.notes:
                 if note == "First author mismatch" and r.best_match:
                     local_authors = (
-                        ", ".join(_html_escape(a) for a in ref.authors)
+                        "; ".join(_html_escape(str(a)) for a in ref.authors)
                         if ref.authors
                         else "<em>none</em>"
                     )
                     online_authors = (
-                        ", ".join(_html_escape(a) for a in r.best_match.authors)
+                        "; ".join(_html_escape(str(a)) for a in r.best_match.authors)
                         if r.best_match.authors
                         else "<em>none</em>"
                     )
