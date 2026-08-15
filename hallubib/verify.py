@@ -54,18 +54,20 @@ def _evidence(ref: Reference, c: OnlineRecord) -> tuple[float, MatchEvidence]:
     return score, ev
 
 
+def _text(value: object) -> str | None:
+    """An empty or blank field is a source saying it has no value, not offering
+    one, so it must read the same as an absent field."""
+    if value is None:
+        return None
+    return str(value).strip() or None
+
+
 def _compute_diffs(ref: Reference, rec: OnlineRecord) -> list[FieldDiff]:
     diffs: list[FieldDiff] = []
     for field_name in ("title", "year", "journal", "volume", "number", "pages", "doi"):
-        local = getattr(ref, field_name)
-        online = getattr(rec, field_name)
-        if local is None and online is None:
-            continue
-        lstr = str(local) if local is not None else None
-        ostr = str(online) if online is not None else None
-        if lstr == ostr:
-            continue
-        if lstr is not None and ostr is None:
+        lstr = _text(getattr(ref, field_name))
+        ostr = _text(getattr(rec, field_name))
+        if lstr == ostr or ostr is None:
             continue
         if field_name == "title" and lstr and ostr:
             if title_similarity(lstr, ostr) > 0.95:
