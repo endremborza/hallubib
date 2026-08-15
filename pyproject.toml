@@ -23,6 +23,9 @@ build-backend = "hatchling.build"
 [tool.hatch.version]
 path = "hallubib/__init__.py"
 
+[tool.hatch.build.targets.wheel]
+packages = ["hallubib"]
+
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 
