@@ -24,6 +24,11 @@ _YEAR_RE = re.compile(r"\b((?:1[5-9]|20)\d{2})\b")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<![A-Z])(?<!et al)\.\s+")
 _QUOTED_TITLE_RE = re.compile(r"(?:``(.+?)''|[“\"](.+?)[”\"])")
 _INITIALS_RE = re.compile(r"^(?:[A-Z]\.?[\s-]*)+$")
+_LNCS_SPLIT_RE = re.compile(
+    r"^([^\"“”]{0,200}?(?:[A-Z]\.|et\s+al\.?))\s*:\s+(.+)$", re.DOTALL
+)
+_TRAILING_YEAR_RE = re.compile(r"\s*\(((?:1[5-9]|20)\d{2})[a-z]?\)\s*$")
+_ARXIV_ID_RE = re.compile(r"arXiv:\s*(\d{4}\.\d{4,5}(?:v\d+)?)", re.IGNORECASE)
 
 _FIRST_CLASS_FIELDS = frozenset(
     {
@@ -212,11 +217,24 @@ def parse_bibitem(key: str, raw_text: str) -> Reference:
     else:
         clean = _clean_tex(raw_text)
         search_space = clean
+        quoted = _QUOTED_TITLE_RE.search(clean)
+        lncs = _LNCS_SPLIT_RE.match(clean)
         paren = _YEAR_PAREN_RE.search(clean)
-        if paren:
+        if quoted:
+            authors = _parse_free_authors(clean[: quoted.start()])
+            title = (quoted.group(1) or quoted.group(2)).strip().strip(",. ")
+            venue = clean[quoted.end() :].strip()
+        elif lncs:
+            authors = _parse_free_authors(lncs.group(1))
+            title, venue = _split_title_venue(lncs.group(2))
+            title = _TRAILING_YEAR_RE.sub("", title).strip(",. ")
+        elif paren:
             authors = _parse_free_authors(clean[: paren.start()])
             rest = clean[paren.end() :].lstrip(".) ")
             title, venue = _split_title_venue(rest)
+            if not title and url:
+                title = clean[: paren.start()].strip(",.;: ")
+                authors = []
         else:
             parts = _SENTENCE_SPLIT_RE.split(clean, maxsplit=2)
             if len(parts) >= 2:
@@ -235,6 +253,12 @@ def parse_bibitem(key: str, raw_text: str) -> Reference:
         bare_years = _YEAR_RE.findall(search_space)
         year = int(bare_years[-1]) if bare_years else None
 
+    arxiv_m = _ARXIV_ID_RE.search(raw_text)
+    if arxiv_m:
+        venue = _ARXIV_ID_RE.sub(" ", venue)
+        if url is None:
+            url = f"https://arxiv.org/abs/{arxiv_m.group(1)}"
+    venue = _TRAILING_YEAR_RE.sub("", venue.strip())
     journal, volume, number, pages = _parse_venue(venue)
     return Reference(
         key=key,

@@ -263,3 +263,43 @@ class TestParseFile:
             assert False, "Should have raised"
         except ValueError:
             pass
+
+
+class TestLncsBibitems:
+    def test_lncs_colon_convention(self):
+        ref = parse_bibitem(
+            "openalex",
+            "Priem, J., Piwowar, H., Orr, R.: OpenAlex: A fully-open index of "
+            "scholarly works, authors, venues, institutions, and concepts. "
+            "arXiv:2205.01833 (2022)",
+        )
+        assert ref.title.startswith("OpenAlex: A fully-open index")
+        assert [a.family for a in ref.authors] == ["Priem", "Piwowar", "Orr"]
+        assert ref.year == 2022
+        assert ref.url == "https://arxiv.org/abs/2205.01833"
+        assert ref.journal is None
+
+    def test_lncs_et_al_and_venue(self):
+        ref = parse_bibitem(
+            "cytoscape",
+            "Shannon, P., et al.: Cytoscape: A software environment for integrated "
+            "models of biomolecular interaction networks. Genome Research 13(11), "
+            "2498--2504 (2003)",
+        )
+        assert ref.title.startswith("Cytoscape: A software environment")
+        assert ref.journal == "Genome Research"
+        assert (ref.volume, ref.number, ref.pages) == ("13", "11", "2498-2504")
+
+    def test_org_url_reference_gets_title(self):
+        ref = parse_bibitem(
+            "scimago", "SCImago Journal Rank, \\url{https://www.scimagojr.com} (2026)"
+        )
+        assert ref.title == "SCImago Journal Rank"
+        assert ref.url == "https://www.scimagojr.com"
+        assert ref.authors == []
+
+    def test_quoted_title_ieee_unaffected(self):
+        ref = parse_bibitem(
+            "k", 'J. Priem et al., "OpenAlex: An index," in Proc. X, 2022.'
+        )
+        assert ref.title.startswith("OpenAlex: An index")
