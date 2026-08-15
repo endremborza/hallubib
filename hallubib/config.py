@@ -13,12 +13,14 @@ class Config:
     timeout: float = 15.0
     max_workers: int = 6
     s2_api_key: str | None = None
+    openalex_api_key: str | None = None
 
 
 def _from_env() -> Config:
     return Config(
         mailto=os.environ.get("HALLUBIB_MAILTO"),
         s2_api_key=os.environ.get("S2_API_KEY"),
+        openalex_api_key=os.environ.get("OPENALEX_API_KEY"),
     )
 
 

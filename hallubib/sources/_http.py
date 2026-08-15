@@ -83,7 +83,10 @@ def request(
     allow_redirects: bool = True,
 ) -> requests.Response:
     host = urlparse(url).netloc
-    timeout = config.get_config().timeout
+    cfg = config.get_config()
+    timeout = cfg.timeout
+    if source == "openalex" and cfg.openalex_api_key:
+        params = {**(params or {}), "api_key": cfg.openalex_api_key}
     detail = "request failed"
     for attempt in range(_MAX_TRIES):
         _pace(host)

@@ -230,3 +230,27 @@ class TestArxivParse:
         monkeypatch.setattr(_http.time, "sleep", lambda s: None)
         with pytest.raises(SourceError):
             arxiv.search("Some Title")
+
+
+class TestOpenalexApiKey:
+    def test_key_injected_only_for_openalex(self, monkeypatch):
+        from hallubib import configure
+        from hallubib.sources import _http
+
+        seen: list[tuple[str, dict | None]] = []
+
+        class FakeSession:
+            def request(self, method, url, *, params, headers, timeout, allow_redirects):
+                seen.append((url, params))
+
+                class R:
+                    status_code = 200
+
+                return R()
+
+        configure(openalex_api_key="oa-secret")
+        monkeypatch.setattr(_http, "session", lambda: FakeSession())
+        _http.request("openalex", "https://api.openalex.org/works", params={"search": "x"})
+        _http.request("crossref", "https://api.crossref.org/works", params={"rows": 1})
+        assert seen[0][1] == {"search": "x", "api_key": "oa-secret"}
+        assert "api_key" not in (seen[1][1] or {})
