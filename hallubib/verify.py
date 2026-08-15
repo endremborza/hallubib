@@ -258,6 +258,10 @@ def check_reference(ref: Reference) -> CheckResult:
 
     if doi_invalid:
         result.notes.append(f"DOI does not resolve: {ref.doi}")
+        # A title match cannot vouch for a DOI that resolves nowhere - that is
+        # the hallucination this tool exists to catch, so it needs a human.
+        if result.status in (Status.VERIFIED, Status.AUTO_CORRECTABLE):
+            result.status = Status.NEEDS_ATTENTION
     return _finalize(result, attempts)
 
 
