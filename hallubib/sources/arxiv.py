@@ -74,12 +74,15 @@ def search(title: str, first_author: Name | None = None) -> list[OnlineRecord]:
             _BASE,
             params={"search_query": " AND ".join(query_parts), "max_results": "3"},
         )
-        if r.status_code != 200:
+        if r.status_code == 404:
+            entries = []
+        elif r.status_code != 200:
             raise SourceError("arxiv", f"HTTP {r.status_code}")
-        try:
-            root = ET.fromstring(r.text)
-        except ET.ParseError as e:
-            raise SourceError("arxiv", f"malformed response: {e}") from e
-        entries = [_parse_entry(el) for el in root.findall("atom:entry", _NS)]
+        else:
+            try:
+                root = ET.fromstring(r.text)
+            except ET.ParseError as e:
+                raise SourceError("arxiv", f"malformed response: {e}") from e
+            entries = [_parse_entry(el) for el in root.findall("atom:entry", _NS)]
         cache.put("arxiv", ck, {"entries": entries})
     return [_to_record(e) for e in entries if e.get("title")]

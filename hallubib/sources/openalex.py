@@ -116,9 +116,12 @@ def search_title(
         if year and with_year_filter:
             params["filter"] = f"publication_year:{year - 1}-{year + 1}"
         r = request("openalex", f"{_BASE}/works", params=params)
-        if r.status_code != 200:
+        if r.status_code == 404:
+            data = {"results": []}
+        elif r.status_code != 200:
             raise SourceError("openalex", f"HTTP {r.status_code}")
-        data = r.json()
+        else:
+            data = r.json()
         works = data.get("results", [])
         cache.put("openalex", ck, data)
     return [rec for w in works if (rec := parse_work(w))]

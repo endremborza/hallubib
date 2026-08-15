@@ -87,8 +87,11 @@ def search(title: str, first_author: Name | None = None) -> list[OnlineRecord]:
         if author_q:
             params["query.author"] = author_q
         r = request("crossref", f"{_BASE}/works", params=params)
-        if r.status_code != 200:
+        if r.status_code == 404:
+            items = []
+        elif r.status_code != 200:
             raise SourceError("crossref", f"HTTP {r.status_code}")
-        items = r.json().get("message", {}).get("items", [])
+        else:
+            items = r.json().get("message", {}).get("items", [])
         cache.put("crossref", ck, {"items": items})
     return [rec for item in items if (rec := parse_item(item))]
